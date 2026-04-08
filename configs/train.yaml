@@ -1,0 +1,18 @@
+dataset_root: data/processed
+annotation_root: data/annotations
+train_split: data/splits/train.txt
+val_split: data/splits/val.txt
+
+template_size: 127
+search_size: 255
+
+batch_size: 8
+epochs: 10
+learning_rate: 0.0001
+weight_decay: 0.0001
+
+freeze_backbone: true
+device: cpu
+
+checkpoint_dir: checkpoints
+log_dir: logs

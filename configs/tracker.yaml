@@ -1,0 +1,15 @@
+video_path: data/input/sample.mp4
+output_path: data/output/tracked_output.mp4
+
+template_size: 127
+search_size: 255
+context_amount: 0.5
+
+smooth_factor: 0.6
+scale_penalty: 0.97
+confidence_threshold: 0.35
+
+device: cpu
+display_output: true
+save_output: true
+debug: true
