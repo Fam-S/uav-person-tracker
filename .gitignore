@@ -17,3 +17,11 @@ data/output/
 *.pt
 *.pth
 *.onnx
+
+data/
+*.mp4
+*.zip
+*.pth
+*.pt
+checkpoints/
+logs/
