@@ -22,12 +22,6 @@ def xywh_to_xyxy(boxes: torch.Tensor) -> torch.Tensor:
     return torch.stack([x, y, x2, y2], dim=-1)
 
 
-def denormalize_bbox_xywh(boxes: torch.Tensor, search_size: int) -> torch.Tensor:
-    if boxes.size(-1) != 4:
-        raise ValueError(f"Expected last dimension = 4, got {boxes.shape}")
-    return boxes * float(search_size)
-
-
 def compute_iou_xywh(pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
     if pred_boxes.ndim != 2 or target_boxes.ndim != 2:
         raise ValueError(
@@ -76,26 +70,48 @@ def select_top_prediction(
         raise ValueError(
             f"Batch mismatch: cls_logits batch={cls_logits.size(0)}, bbox_pred batch={bbox_pred.size(0)}"
         )
-    if cls_logits.shape[-2:] != bbox_pred.shape[-2:]:
-        raise ValueError(
-            f"Spatial mismatch: cls_logits HW={cls_logits.shape[-2:]}, bbox_pred HW={bbox_pred.shape[-2:]}"
-        )
 
-    batch_size, _, grid_h, grid_w = cls_logits.shape
+    batch_size, _, cls_h, cls_w = cls_logits.shape
+    _, _, reg_h, reg_w = bbox_pred.shape
 
     scores = torch.sigmoid(cls_logits).view(batch_size, -1)
     top_scores, top_indices = torch.max(scores, dim=1)
 
-    gy = torch.div(top_indices, grid_w, rounding_mode="floor")
-    gx = top_indices % grid_w
-    pred_indices = torch.stack([gy, gx], dim=1)
+    gy_cls = torch.div(top_indices, cls_w, rounding_mode="floor")
+    gx_cls = top_indices % cls_w
+    pred_indices = torch.stack([gy_cls, gx_cls], dim=1)
+
+    stride_h = cls_h // reg_h
+    stride_w = cls_w // reg_w
+    
+    gy_reg = (gy_cls / stride_h).long().clamp(max=reg_h - 1)
+    gx_reg = (gx_cls / stride_w).long().clamp(max=reg_w - 1)
+
+    reg_stride = float(search_size) / float(reg_w)
 
     pred_boxes = []
     for b in range(batch_size):
-        pred_boxes.append(bbox_pred[b, :, gy[b], gx[b]])
+        tx = bbox_pred[b, 0, gy_reg[b], gx_reg[b]]
+        ty = bbox_pred[b, 1, gy_reg[b], gx_reg[b]]
+        tw = bbox_pred[b, 2, gy_reg[b], gx_reg[b]]
+        th = bbox_pred[b, 3, gy_reg[b], gx_reg[b]]
+
+        anchor_cx = (gx_reg[b].float() + 0.5) * reg_stride
+        anchor_cy = (gy_reg[b].float() + 0.5) * reg_stride
+        
+        pred_cx = anchor_cx + tx * reg_stride
+        pred_cy = anchor_cy + ty * reg_stride
+        
+        # Clamp exp to prevent exploding boxes during early training
+        pred_w = torch.clamp(torch.exp(tw), max=10.0) * reg_stride
+        pred_h = torch.clamp(torch.exp(th), max=10.0) * reg_stride
+        
+        pred_x = pred_cx - (pred_w / 2.0)
+        pred_y = pred_cy - (pred_h / 2.0)
+        
+        pred_boxes.append(torch.stack([pred_x, pred_y, pred_w, pred_h]))
 
     pred_bbox = torch.stack(pred_boxes, dim=0)
-    pred_bbox = denormalize_bbox_xywh(pred_bbox, search_size=search_size)
 
     return PredictionSelection(
         pred_bbox=pred_bbox,
@@ -133,10 +149,9 @@ def compute_batch_metrics(
 
 if __name__ == "__main__":
     batch_size = 2
-    grid_h, grid_w = 5, 5
-
-    cls_logits = torch.randn(batch_size, 1, grid_h, grid_w)
-    bbox_pred = torch.randn(batch_size, 4, grid_h, grid_w)
+    
+    cls_logits = torch.randn(batch_size, 1, 25, 25) 
+    bbox_pred = torch.randn(batch_size, 4, 5, 5)    
 
     search_bbox = torch.tensor(
         [
@@ -155,7 +170,7 @@ if __name__ == "__main__":
 
     print("pred_bbox:", metrics["pred_bbox"].shape)
     print("pred_scores:", metrics["pred_scores"].shape)
-    print("pred_indices:", metrics["pred_indices"])
+    print("pred_indices (from 25x25 map):", metrics["pred_indices"])
     print("ious:", metrics["ious"])
     print("mean_iou:", float(metrics["mean_iou"]))
     print("mean_score:", float(metrics["mean_score"]))

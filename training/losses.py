@@ -29,16 +29,13 @@ def _clamp_indices(value: torch.Tensor, max_value: int) -> torch.Tensor:
     return value.clamp(min=0, max=max_value - 1)
 
 
-def normalize_bbox_xywh(search_bbox: torch.Tensor, search_size: int) -> torch.Tensor:
-    if search_bbox.ndim != 2 or search_bbox.size(1) != 4:
-        raise ValueError(f"Expected search_bbox shape [B, 4], got {tuple(search_bbox.shape)}")
-    return search_bbox / float(search_size)
-
-
 def build_targets(
     search_bbox: torch.Tensor,
     cls_logits: torch.Tensor,
     search_size: int = 255,
+    reg_grid_h: int = 5,
+    reg_grid_w: int = 5,
+    gaussian_penalty_k: float = 0.1,
 ) -> SiameseTargets:
     if search_bbox.ndim != 2 or search_bbox.size(1) != 4:
         raise ValueError(f"Expected search_bbox shape [B, 4], got {tuple(search_bbox.shape)}")
@@ -49,7 +46,7 @@ def build_targets(
     device = cls_logits.device
     dtype = cls_logits.dtype
 
-    batch_size, _, grid_h, grid_w = cls_logits.shape
+    batch_size, _, cls_h, cls_w = cls_logits.shape
 
     if search_bbox.size(0) != batch_size:
         raise ValueError(
@@ -57,31 +54,68 @@ def build_targets(
             f"{search_bbox.size(0)} vs {batch_size}"
         )
 
-    cls_target = torch.zeros((batch_size, 1, grid_h, grid_w), device=device, dtype=dtype)
-    reg_target = torch.zeros((batch_size, 4, grid_h, grid_w), device=device, dtype=dtype)
-    reg_mask = torch.zeros((batch_size, 1, grid_h, grid_w), device=device, dtype=dtype)
+    # cls_target is built on the HIGH resolution grid (e.g., 25x25)
+    cls_target = torch.zeros((batch_size, 1, cls_h, cls_w), device=device, dtype=dtype)
+    
+    # reg_target is built on the LOW resolution grid (e.g., 5x5)
+    reg_target = torch.zeros((batch_size, 4, reg_grid_h, reg_grid_w), device=device, dtype=dtype)
+    reg_mask = torch.zeros((batch_size, 1, reg_grid_h, reg_grid_w), device=device, dtype=dtype)
 
     x, y, w, h = search_bbox.unbind(dim=1)
     center_x = x + (w / 2.0)
     center_y = y + (h / 2.0)
 
-    gx = torch.floor(center_x / float(search_size) * grid_w).long()
-    gy = torch.floor(center_y / float(search_size) * grid_h).long()
+    # 1. Map to REG grid (5x5) for offsets
+    reg_stride = float(search_size) / float(reg_grid_w)
+    gx_reg = torch.floor(center_x / reg_stride).long()
+    gy_reg = torch.floor(center_y / reg_stride).long()
+    gx_reg = _clamp_indices(gx_reg, reg_grid_w)
+    gy_reg = _clamp_indices(gy_reg, reg_grid_h)
 
-    gx = _clamp_indices(gx, grid_w)
-    gy = _clamp_indices(gy, grid_h)
+    positive_indices = torch.stack([gy_reg, gx_reg], dim=1)
 
-    positive_indices = torch.stack([gy, gx], dim=1)
-    normalized_bbox = normalize_bbox_xywh(search_bbox, search_size=search_size).to(device=device, dtype=dtype)
+    # 2. Map to CLS grid (25x25) for gaussian
+    cls_stride = float(search_size) / float(cls_w)
+    gx_cls = torch.floor(center_x / cls_stride).long()
+    gy_cls = torch.floor(center_y / cls_stride).long()
+    gx_cls = _clamp_indices(gx_cls, cls_w)
+    gy_cls = _clamp_indices(gy_cls, cls_h)
+
+    # Build 2D Gaussian Heatmap on CLS grid
+    y_grid = torch.arange(0, cls_h, device=device, dtype=dtype)
+    x_grid = torch.arange(0, cls_w, device=device, dtype=dtype)
+    y_grid, x_grid = torch.meshgrid(y_grid, x_grid, indexing='ij')
 
     for b in range(batch_size):
-        cls_target[b, 0, gy[b], gx[b]] = 1.0
-        reg_mask[b, 0, gy[b], gx[b]] = 1.0
+        target_size = torch.sqrt(w[b] * h[b])
+        sigma = target_size / (cls_w * gaussian_penalty_k)
+        sigma = torch.clamp(sigma, min=1.0)
 
-        reg_target[b, 0, :, :] = normalized_bbox[b, 0]
-        reg_target[b, 1, :, :] = normalized_bbox[b, 1]
-        reg_target[b, 2, :, :] = normalized_bbox[b, 2]
-        reg_target[b, 3, :, :] = normalized_bbox[b, 3]
+        dist = (x_grid - gx_cls[b].float())**2 + (y_grid - gy_cls[b].float())**2
+        gaussian_map = torch.exp(-dist / (2 * sigma**2))
+        
+        cls_target[b, 0, :, :] = gaussian_map
+        
+        # Build Offsets on REG grid
+        reg_mask[b, 0, gy_reg[b], gx_reg[b]] = 1.0
+
+        anchor_cx = (gx_reg[b].float() + 0.5) * reg_stride
+        anchor_cy = (gy_reg[b].float() + 0.5) * reg_stride
+
+        # Calculate Offset and Log Scale
+        tx = (center_x[b] - anchor_cx) / reg_stride
+        ty = (center_y[b] - anchor_cy) / reg_stride
+        
+        # Clamping w/h before log to prevent NaN if a box is extremely small
+        w_clamped = torch.clamp(w[b], min=1e-4)
+        h_clamped = torch.clamp(h[b], min=1e-4)
+        tw = torch.log(w_clamped / reg_stride)
+        th = torch.log(h_clamped / reg_stride)
+
+        reg_target[b, 0, gy_reg[b], gx_reg[b]] = tx
+        reg_target[b, 1, gy_reg[b], gx_reg[b]] = ty
+        reg_target[b, 2, gy_reg[b], gx_reg[b]] = tw
+        reg_target[b, 3, gy_reg[b], gx_reg[b]] = th
 
     return SiameseTargets(
         cls_target=cls_target,
@@ -92,12 +126,6 @@ def build_targets(
 
 
 class SiameseLoss(nn.Module):
-    """
-    Baseline loss:
-    - BCEWithLogits for classification
-    - SmoothL1 for bbox regression on positive cell only
-    """
-
     def __init__(
         self,
         cls_weight: float = 1.0,
@@ -127,10 +155,15 @@ class SiameseLoss(nn.Module):
                 f"{cls_logits.size(0)} vs {bbox_pred.size(0)}"
             )
 
+        # Extract the spatial dimensions of the regression map to pass to build_targets
+        reg_grid_h, reg_grid_w = bbox_pred.shape[-2:]
+
         targets = build_targets(
             search_bbox=search_bbox,
             cls_logits=cls_logits,
             search_size=self.search_size,
+            reg_grid_h=reg_grid_h,
+            reg_grid_w=reg_grid_w,
         )
 
         cls_loss = self.cls_loss_fn(cls_logits, targets.cls_target)
@@ -152,42 +185,3 @@ class SiameseLoss(nn.Module):
             reg_mask=targets.reg_mask,
             positive_indices=targets.positive_indices,
         )
-
-
-if __name__ == "__main__":
-    batch_size = 2
-    grid_h, grid_w = 5, 5
-
-    cls_logits = torch.randn(batch_size, 1, grid_h, grid_w)
-    bbox_pred = torch.randn(batch_size, 4, grid_h, grid_w)
-
-    search_bbox = torch.tensor(
-        [
-            [73.0, 75.0, 38.0, 107.0],
-            [90.0, 60.0, 40.0, 80.0],
-        ],
-        dtype=torch.float32,
-    )
-
-    criterion = SiameseLoss(
-        cls_weight=1.0,
-        reg_weight=1.0,
-        search_size=255,
-        smooth_l1_beta=1.0,
-    )
-
-    loss_out = criterion(
-        cls_logits=cls_logits,
-        bbox_pred=bbox_pred,
-        search_bbox=search_bbox,
-    )
-
-    print("cls_logits:", cls_logits.shape)
-    print("bbox_pred:", bbox_pred.shape)
-    print("cls_target:", loss_out.cls_target.shape)
-    print("reg_target:", loss_out.reg_target.shape)
-    print("reg_mask:", loss_out.reg_mask.shape)
-    print("positive_indices:", loss_out.positive_indices)
-    print("cls_loss:", float(loss_out.cls_loss))
-    print("reg_loss:", float(loss_out.reg_loss))
-    print("total_loss:", float(loss_out.total_loss))

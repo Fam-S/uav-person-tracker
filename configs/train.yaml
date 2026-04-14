@@ -5,13 +5,13 @@ template_size: 127
 search_size: 255
 
 batch_size: 8
-epochs: 50
+epochs: 10
 learning_rate: 0.0001
 backbone_learning_rate: 0.00001
 weight_decay: 0.0001
 
-freeze_backbone: true
-unfreeze_last_n_backbone_blocks: 1
+freeze_backbone: false
+unfreeze_last_n_backbone_blocks: 0
 device: cuda
 
 checkpoint_dir: /kaggle/working/checkpoints
@@ -23,7 +23,7 @@ pretrained_backbone: true
 normalize_input: true
 
 cls_weight: 1.0
-reg_weight: 1.0
+reg_weight: 5.0
 smooth_l1_beta: 1.0
 
 num_workers: 2
