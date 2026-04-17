@@ -56,7 +56,7 @@ def build_targets(
 
     # cls_target is built on the HIGH resolution grid (e.g., 25x25)
     cls_target = torch.zeros((batch_size, 1, cls_h, cls_w), device=device, dtype=dtype)
-    
+
     # reg_target is built on the LOW resolution grid (e.g., 5x5)
     reg_target = torch.zeros((batch_size, 4, reg_grid_h, reg_grid_w), device=device, dtype=dtype)
     reg_mask = torch.zeros((batch_size, 1, reg_grid_h, reg_grid_w), device=device, dtype=dtype)
@@ -93,9 +93,9 @@ def build_targets(
 
         dist = (x_grid - gx_cls[b].float())**2 + (y_grid - gy_cls[b].float())**2
         gaussian_map = torch.exp(-dist / (2 * sigma**2))
-        
+
         cls_target[b, 0, :, :] = gaussian_map
-        
+
         # Build Offsets on REG grid
         reg_mask[b, 0, gy_reg[b], gx_reg[b]] = 1.0
 
@@ -105,7 +105,7 @@ def build_targets(
         # Calculate Offset and Log Scale
         tx = (center_x[b] - anchor_cx) / reg_stride
         ty = (center_y[b] - anchor_cy) / reg_stride
-        
+
         # Clamping w/h before log to prevent NaN if a box is extremely small
         w_clamped = torch.clamp(w[b], min=1e-4)
         h_clamped = torch.clamp(h[b], min=1e-4)

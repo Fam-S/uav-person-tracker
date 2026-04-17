@@ -1,27 +1,41 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+
+# Virtual environments
 .venv/
 venv/
+
+# Environment
 .env
+
+# Editors
 .idea/
 .vscode/
 .DS_Store
 
+# Model artifacts
 checkpoints/
 logs/
-debug/
-data/output/
-
 *.pt
 *.pth
 *.onnx
 
-data/
+# Data (raw/processed/output — large, not tracked)
+data/raw/
+data/processed/
+data/output/
+data/input/*.mp4
+
+# Video files
 *.mp4
+*.avi
+
+# Archives
 *.zip
-*.pth
-*.pt
-checkpoints/
-logs/
+
+# Claude Code local settings
+.claude/settings.local.json

@@ -51,13 +51,13 @@ class Predictor:
         bbox_pred = outputs["bbox_pred"]     # [1, 4, 5, 5]
 
         score_map = torch.sigmoid(cls_logits[0, 0])  # [5, 5]
-        
+
         flat_index = int(torch.argmax(score_map).item())
         map_h, map_w = score_map.shape
         grid_y = flat_index // map_w
         grid_x = flat_index % map_w
         best_score = float(score_map[grid_y, grid_x].item())
-        
+
         # Extract raw offsets directly from 5x5
         bbox_raw = bbox_pred[0, :, grid_y, grid_x].detach().cpu().numpy().astype(np.float32)
         cls_map = score_map.detach().cpu().numpy().astype(np.float32)

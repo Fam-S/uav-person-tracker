@@ -160,26 +160,3 @@ class MobileNetV3Backbone(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.forward_features(x).features
-
-
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    backbone = MobileNetV3Backbone(
-        variant="small",
-        pretrained=True,
-        out_channels=96,
-        trainable=False,
-        normalize_input=True,
-    ).to(device)
-
-    template = torch.randn(2, 3, 127, 127, device=device)
-    search = torch.randn(2, 3, 255, 255, device=device)
-
-    z_feat = backbone(template)
-    x_feat = backbone(search)
-
-    print("template input:", template.shape)
-    print("search input:", search.shape)
-    print("template features:", z_feat.shape)
-    print("search features:", x_feat.shape)

@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-
 import argparse
+from pathlib import Path
 import torch
 
-from training.dataset_loader import UAV123SiameseDataset
-from models.tracker.siamese_tracker import SiameseTracker
-from training.losses import SiameseLoss
-from training.metrics import compute_batch_metrics
+from data.dataset import UAV123SiameseDataset
+from models.siamese import SiameseTracker
+from models.losses import SiameseLoss
+from train import compute_batch_metrics
 
 
 def main() -> None:

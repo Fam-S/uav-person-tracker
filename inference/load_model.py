@@ -1,9 +1,7 @@
-
-
 from pathlib import Path
 import torch
 
-from models.tracker.siamese_tracker import SiameseTracker
+from models.siamese import SiameseTracker
 
 
 def load_model(checkpoint_path: str, device: str = None):

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "uav-person-tracker"
+version = "0.1.0"
+description = "Siamese network-based UAV person tracker for edge deployment"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "pyyaml>=6.0",
+    "matplotlib>=3.7",
+    "tqdm>=4.65",
+    "pillow>=10.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["models", "data", "inference"]
+
+[project.scripts]
+train = "train:main"
+infer = "inference.video_runner:main"
+preprocess = "data.preprocess:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

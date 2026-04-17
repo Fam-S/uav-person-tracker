@@ -1,16 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
 import random
-import sys
 from typing import Any
 
-if __package__ is None or __package__ == "":
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
-
-from training.dataset_loader import (
+from data.dataset import (
     ATTRIBUTE_NAMES,
     UAV123DatasetLoader,
     get_processed_dataset_paths,
@@ -144,4 +140,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

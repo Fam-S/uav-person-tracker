@@ -1,12 +1,8 @@
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-
 import numpy as np
 
-from src.inference.load_model import load_model
-from src.inference.predictor import Predictor
-from src.inference.tracker import SiameseTrackerInference
+from inference.load_model import load_model
+from inference.predictor import Predictor
+from inference.tracker import SiameseTrackerInference
 
 model, device = load_model("checkpoints/best.pth")
 

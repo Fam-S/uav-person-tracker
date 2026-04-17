@@ -6,10 +6,10 @@ from pathlib import Path
 import cv2
 import yaml
 
-from src.inference.load_model import load_model
-from src.inference.predictor import Predictor
-from src.inference.tracker import SiameseTrackerInference
-from src.inference.visualize import draw_tracking_overlay, bbox_center
+from inference.load_model import load_model
+from inference.predictor import Predictor
+from inference.tracker import SiameseTrackerInference
+from inference.visualize import draw_tracking_overlay, bbox_center
 
 
 def load_config(config_path: str | Path) -> dict:
@@ -34,7 +34,7 @@ class PointSelector:
     def __init__(self, frame):
         self.frame = frame
         self.point = None
-        self.box_size = 100  
+        self.box_size = 100
         self.done = False
 
     def mouse_callback(self, event, x, y, flags, param):
@@ -42,14 +42,14 @@ class PointSelector:
             self.point = (x, y)
         elif event == cv2.EVENT_MOUSEWHEEL:
             if self.point is not None:
-                if flags > 0: self.box_size = min(500, self.box_size + 15) 
-                else: self.box_size = max(30, self.box_size - 15)    
+                if flags > 0: self.box_size = min(500, self.box_size + 15)
+                else: self.box_size = max(30, self.box_size - 15)
 
     def run(self):
         window_name = "Click Target & Scroll to Resize"
         cv2.namedWindow(window_name)
         cv2.setMouseCallback(window_name, self.mouse_callback)
-        
+
         while not self.done:
             display = self.frame.copy()
             if self.point is not None:
@@ -59,60 +59,61 @@ class PointSelector:
                 cv2.putText(display, f"Size: {self.box_size} | Press ENTER", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             else:
                 cv2.putText(display, "Click on the target...", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                
+
             cv2.imshow(window_name, display)
             key = cv2.waitKey(30) & 0xFF
-            
-            if key == 13 and self.point is not None:  
+
+            if key == 13 and self.point is not None:
                 self.done = True
-            elif key == 27:  
+            elif key == 27:
                 self.point = None
                 self.done = True
-                
+
         cv2.destroyWindow(window_name)
         return self.point
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Siamese tracker on video")
-    parser.add_argument("--config", type=str, default="configs/tracker.yaml")
-    parser.add_argument("--checkpoint", type=str, default="checkpoints/best.pth")
+    parser.add_argument("--config", type=str, default="config.yaml")
+    parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--video", type=str, default=None, help="Direct path to video file")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    cfg_model = config.get("model", {})
+    cfg_infer = config.get("infer", {})
 
-    video_path = args.video or config.get("video_path")
-    output_path = config.get("output_path", "data/output/tracked_output.mp4")
-    
-    template_size = int(config.get("template_size", 127))
-    search_size = int(config.get("search_size", 255))
-    device = config.get("device")
-    display_output = bool(config.get("display_output", True))
-    save_output = bool(config.get("save_output", True))
-    debug = bool(config.get("debug", False))
-    confidence_threshold = float(config.get("confidence_threshold", 0.35))
+    video_path = args.video or cfg_infer.get("video_path")
+    output_path = cfg_infer.get("output_path", "data/output/tracked_output.mp4")
 
-    # FIX: Read context_amount directly from config for the new tracker logic
-    context_amount = float(config.get("context_amount", 0.5))
+    template_size = int(cfg_model.get("template_size", 127))
+    search_size = int(cfg_model.get("search_size", 255))
+    device = cfg_infer.get("device")
+    display_output = bool(cfg_infer.get("display_output", True))
+    save_output = bool(cfg_infer.get("save_output", True))
+    debug = bool(cfg_infer.get("debug", False))
+    confidence_threshold = float(cfg_infer.get("confidence_threshold", 0.35))
+
+    context_amount = float(cfg_model.get("context_amount", 0.5))
 
     tracking_threshold = max(0.6, confidence_threshold)
     uncertain_threshold = min(0.3, confidence_threshold)
 
     if not video_path: raise ValueError("Must provide --video or set video_path in tracker.yaml")
 
+    checkpoint = args.checkpoint or cfg_infer.get("checkpoint", "checkpoints/best.pth")
     print(f"Loading model...")
-    model, device = load_model(args.checkpoint, device=device)
+    model, device = load_model(checkpoint, device=device)
 
     predictor = Predictor(model=model, device=device, template_size=template_size, search_size=search_size)
-    
-    # FIX: Pass context_amount instead of search_scale
+
     tracker = SiameseTrackerInference(
-        predictor=predictor, 
-        template_size=template_size, 
+        predictor=predictor,
+        template_size=template_size,
         search_size=search_size,
         context_amount=context_amount,
-        tracking_threshold=tracking_threshold, 
+        tracking_threshold=tracking_threshold,
         uncertain_threshold=uncertain_threshold,
     )
 
