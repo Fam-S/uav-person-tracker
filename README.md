@@ -40,8 +40,6 @@ Short version:
 - **Stage 1 model:** suitable for a competition submission
 - **Stage 2 model:** intended for the college GUI application
 
-See [`PROJECT_NOTES.md`](PROJECT_NOTES.md) for the full reasoning and dataset notes.
-
 ---
 
 ## Final Product Vision
@@ -54,8 +52,6 @@ Selected product direction:
 - **Secondary considered use case:** **UAV-assisted search and rescue support**
 
 The application is intended to load live or recorded UAV video, let the user select one person, track that person in real time, and expose clear tracking states such as **Tracking**, **Uncertain**, and **Lost**.
-
-See [`PROJECT_NOTES.md`](PROJECT_NOTES.md) for the full product vision, scenario, narrative use case, and benefits.
 
 ---
 
@@ -89,24 +85,19 @@ Tracked Person Output
 * Designed for edge deployment
 * Manual target initialization (ROI selection)
 * Real-time frame-by-frame tracking
-* Config-driven system
+* Config-driven system (`config.yaml`)
 * Modular codebase
-* Training pipeline support
-* Debug outputs (bounding boxes, crops)
+* Training pipeline with per-epoch checkpointing
+* Inference pipeline with interactive ROI selection and visualization
 
 ---
 
 ## Documentation
 
 - [`PROJECT_NOTES.md`](PROJECT_NOTES.md) - Extended project reasoning, dataset strategy, product vision, and selected use-case narrative.
-- [`docs/models_comparisons.md`](docs/models_comparisons.md) - Backbone and tracker comparisons, including MobileOne, ShuffleNetV2, MobileNetV3, and alternative tracking directions.
 - [`docs/public_dataset_notes.md`](docs/public_dataset_notes.md) - Notes on the competition dataset, person-tracking alignment, and recommended supplementary public datasets.
-- [`docs/future_improvements.md`](docs/future_improvements.md) - Planned improvements for the primary MobileOne-S0 Siamese experiment.
-- [`docs/future_experiments.md`](docs/future_experiments.md) - Future experiment ideas for long-term tracking, occlusion handling, and recovery logic.
-- [`docs/siamese_tracking_occlusion_notes.md`](docs/siamese_tracking_occlusion_notes.md) - Explanation of Siamese tracking limits under occlusion and long-term target loss.
 - [`docs/siamlight_components.md`](docs/siamlight_components.md) - Breakdown of the main components in a SiamLight-style tracker.
 - [`docs/info-for-agents.md`](docs/info-for-agents.md) - Consolidated notes about dataset structure, rules, scoring, and constraints from the overlapping MTC-AIC4 context.
-- [`docs/veo_test_video_prompts.md`](docs/veo_test_video_prompts.md) - Veo 3.1 prompts for generating realistic UAV tracking test videos, including stress-test cases.
 
 ---
 
@@ -115,20 +106,36 @@ Tracked Person Output
 ```
 uav-person-tracker/
 │
-├── main.py                # Inference entry point
-├── train.py               # Training entry point
-├── validate.py            # Validation script
-├── demo.py                # Demo runner
+├── config.yaml                 # Combined config (model, train, inference)
+├── requirements.txt            # pip dependencies
 │
-├── configs/               # Configuration files
-├── data/                  # Input/output and datasets
-├── models/                # Backbone + tracker modules
-├── src/                   # Core pipeline (video, preprocessing)
-├── training/              # Training pipeline
-├── evaluation/            # Metrics and evaluation
-├── debug/                 # Debug outputs
-├── checkpoints/           # Saved models
-└── logs/                  # Training logs
+├── train/                      # Training package
+│   ├── __init__.py
+│   ├── metrics.py              # IoU, prediction selection, batch metrics
+│   └── run.py                  # SiameseTrainer + training loop entry point
+│
+├── inference/                  # Inference package
+│   ├── load_model.py           # Load checkpoint → SiameseTracker
+│   ├── predictor.py            # numpy image pair → PredictionResult
+│   ├── tracker.py              # Stateful frame-by-frame tracker
+│   ├── video_runner.py         # Full video pipeline with interactive ROI
+│   └── visualize.py            # Bounding box + trail overlay drawing
+│
+├── models/                     # Model architecture
+│   ├── backbone/
+│   │   └── mobilenetv3.py      # MobileNetV3-Small feature extractor
+│   ├── siamese.py              # DepthwiseCrossCorrelation + SiameseHead + SiameseTracker
+│   └── losses.py               # SiameseLoss + build_targets
+│
+├── data/                       # Data pipeline
+│   ├── dataset.py              # UAV123SiameseDataset
+│   ├── preprocess.py           # Raw UAV123 → manifest/cache/splits
+│   └── input/                  # Sample input videos
+│
+├── evaluation/                 # Evaluation (placeholder)
+├── tests/                      # Test suite
+├── docs/                       # Documentation
+└── notebooks/                  # Jupyter notebooks
 ```
 
 ---
@@ -142,135 +149,87 @@ git clone https://github.com/Fam-S/uav-person-tracker.git
 cd uav-person-tracker
 ```
 
-### 2. Create virtual environment
+### 2. Install dependencies
+
+Using **uv** (recommended):
+
+```bash
+uv sync                # core dependencies
+uv sync --group dev    # include pytest
+```
+
+Using **pip**:
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate   # Windows
+.venv\Scripts\activate        # Windows
+source .venv/bin/activate     # Linux/macOS
+pip install -r requirements.txt
 ```
 
-### 3. Install dependencies
+---
+
+## Quick Start (without uv)
+
+If you prefer pip or already have dependencies installed globally:
 
 ```bash
 pip install -r requirements.txt
+python data/preprocess.py --dataset-root <path-to-dataset> --output-dir data/processed
+python train/run.py --config config.yaml
+python inference/video_runner.py --checkpoint checkpoints/best.pth --video <path-to-video>
 ```
 
 ---
 
 ## Usage
 
-### Run Inference (Tracking)
-
-Place a video file at:
-
-```
-data/input/sample.mp4
-```
-
-Run:
+### Preprocess Dataset
 
 ```bash
-python main.py --config configs\tracker.yaml
+# Using uv
+uv run preprocess --dataset-root <path-to-dataset> --output-dir data/processed
+
+# Using python directly
+python data/preprocess.py --dataset-root <path-to-dataset> --output-dir data/processed
 ```
-
-Steps:
-
-1. First frame opens
-2. Select the target person using mouse
-3. Press Enter to confirm
-4. Bounding box is saved in `debug/`
-
----
 
 ### Run Training
 
 ```bash
-python train.py --config configs\train.yaml
+# Using uv
+uv run train --config config.yaml
+
+# Using python directly
+python train/run.py --config config.yaml
 ```
 
-This will:
+Options:
 
-* Load dataset
-* Generate template-search pairs
-* Train the tracking model
-* Save checkpoints
+* `--config <path>` — path to YAML config (default: `config.yaml`)
+* `--resume <path>` — resume from a checkpoint (e.g. `checkpoints/epoch_005.pth`)
 
----
-
-### Run Validation
+### Run Inference (Tracking)
 
 ```bash
-python validate.py --checkpoint checkpoints\best.pth
+# Using uv
+uv run infer --checkpoint checkpoints/best.pth --video <path-to-video>
+
+# Using python directly
+python inference/video_runner.py --checkpoint checkpoints/best.pth --video <path-to-video>
 ```
 
 ---
 
 ## Configuration
 
-### tracker.yaml
+All settings live in a single [`config.yaml`](config.yaml):
 
-Controls inference behavior:
-
-* video path
-* model parameters
-* smoothing
-* scale adaptation
-
-### train.yaml
-
-Controls training:
-
-* dataset paths
-* batch size
-* learning rate
-* epochs
-
----
-
-## Technologies Used
-
-* Python
-* PyTorch
-* OpenCV
-* NumPy
-* YAML configuration
-
----
-
-## Current Status
-
-✔ Repo structure completed
-✔ Inference pipeline initialized
-✔ Training pipeline skeleton ready
-✔ Primary CPU-only backbone selected: MobileOne-S0
-⬜ Full tracker implementation in progress
-⬜ Model training and evaluation in progress
-
----
-
-## Limitations
-
-* Single object tracking only
-* No re-detection mechanism yet
-* GUI application not implemented yet
-* Training pipeline is basic (prototype level)
-
----
-
-## Future Work
-
-* Add re-detection module
-* Improve tracking robustness under occlusion
-* Multi-object tracking support
-* Deploy on UAV edge devices
-* Optimize inference speed (TensorRT / ONNX)
-
----
-
-## Team
-
-* 2-person development team
-* Focus: rapid prototyping within a one-week timeline
+| Section | Key Settings |
+|---------|-------------|
+| `model` | backbone variant, feature channels, template/search size, pretrained flag |
+| `train` | dataset paths, batch size, learning rate, epochs, loss weights, backbone freeze |
+| `infer` | checkpoint path, video path, confidence threshold, device |
 
 ---
 

@@ -7,7 +7,7 @@ import torch
 from data.dataset import UAV123SiameseDataset
 from models.siamese import SiameseTracker
 from models.losses import SiameseLoss
-from train import compute_batch_metrics
+from train.metrics import compute_batch_metrics
 
 
 def main() -> None:

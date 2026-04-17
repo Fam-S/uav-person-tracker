@@ -8,21 +8,34 @@ version = "0.1.0"
 description = "Siamese network-based UAV person tracker for edge deployment"
 requires-python = ">=3.11"
 dependencies = [
-    "torch>=2.0",
-    "torchvision>=0.15",
+    "torch==2.7.1+cu126",
+    "torchvision==0.22.1+cu126",
+    "torchaudio==2.7.1+cu126",
+    "torchinfo==1.8.0",
+    "torchmetrics==1.8.2",
     "opencv-python>=4.8",
-    "numpy>=1.24",
+    "numpy>=2.4.4",
     "pyyaml>=6.0",
     "matplotlib>=3.7",
     "tqdm>=4.65",
     "pillow>=10.0",
 ]
 
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+torchaudio = { index = "pytorch-cu126" }
+
 [tool.hatch.build.targets.wheel]
 packages = ["models", "data", "inference"]
 
 [project.scripts]
-train = "train:main"
+train = "train.run:main"
 infer = "inference.video_runner:main"
 preprocess = "data.preprocess:main"
 
