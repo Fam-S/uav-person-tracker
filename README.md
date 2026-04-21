@@ -99,14 +99,16 @@ Tracked Person Output
 
 ## Features
 
-* Siamese-based visual tracking
-* Lightweight Siamese tracking pipeline
-* Target CPU-only design uses symmetric MobileOne-S0 branches
-* Designed for edge deployment
-* Manual target initialization (ROI selection)
-* Real-time frame-by-frame tracking
-* Config-driven system (`config.yaml`)
-* Modular codebase
+* Siamese-based visual tracking (training + inference pipeline)
+* Lightweight architecture targeting CPU-only edge hardware
+* **Desktop GUI** (`app/`) built with PySide6 — load video, select target, track in real time
+* OpenCV CSRT tracker as the V1 backend (swappable via config)
+* Threaded rendering — worker thread runs the tracker; Qt main thread renders at 30 fps without blocking
+* Frame downscaling before tracking (`track_max_width`) for speed without sacrificing display resolution
+* Explicit tracker states: Tracking, Uncertain, Lost
+* Bounding box overlay, confidence label, and trajectory trail
+* Config-driven system (`config.yaml` for model/train/infer, `app/app_config.yaml` for the GUI)
+* Modular codebase with a stable `TrackerBackend` interface for easy model swapping
 * Training pipeline with per-epoch checkpointing
 * Inference pipeline with interactive ROI selection and visualization
 
@@ -172,7 +174,8 @@ cd uav-person-tracker
 Using **uv** (recommended):
 
 ```bash
-uv sync                # core dependencies
+uv sync                # core dependencies (includes opencv-contrib-python)
+uv sync --group ui     # install the desktop UI dependencies (PySide6)
 uv sync --group dev    # include pytest
 ```
 
@@ -237,17 +240,29 @@ uv run infer --checkpoint checkpoints/best.pth --video <path-to-video>
 python inference/video_runner.py --checkpoint checkpoints/best.pth --video <path-to-video>
 ```
 
+### Run the Desktop GUI
+
+```bash
+uv sync --group ui
+uv run python -m app.main
+```
+
+Flow: Open Video → click target center → drag to resize → Start → Pause / Reset
+
 ---
 
 ## Configuration
 
-All settings live in a single [`config.yaml`](config.yaml):
+All settings live in a single [`config.yaml`](config.yaml) for model/training/inference, and [`app/app_config.yaml`](app/app_config.yaml) for the GUI:
 
-| Section | Key Settings |
-|---------|-------------|
-| `model` | backbone variant, feature channels, template/search size, pretrained flag |
-| `train` | dataset paths, batch size, learning rate, epochs, loss weights, backbone freeze |
-| `infer` | checkpoint path, video path, confidence threshold, device |
+| Config file | Section | Key Settings |
+|-------------|---------|-------------|
+| `config.yaml` | `model` | backbone variant, feature channels, template/search size, pretrained flag |
+| `config.yaml` | `train` | dataset paths, batch size, learning rate, epochs, loss weights, backbone freeze |
+| `config.yaml` | `infer` | checkpoint path, video path, confidence threshold, device |
+| `app/app_config.yaml` | `tracking` | backend, `track_max_width`, thresholds, trail length |
+| `app/app_config.yaml` | `video` | `target_fps` |
+| `app/app_config.yaml` | `overlay` | show confidence, show trail |
 
 ---
 

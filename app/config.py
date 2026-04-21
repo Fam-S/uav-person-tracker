@@ -24,7 +24,7 @@ class VideoSettings:
 
 @dataclass(slots=True)
 class TrackingSettings:
-    backend: str = "template_match"
+    backend: str = "csrt"
     checkpoint: str | None = None
     uncertain_confidence_threshold: float = 0.55
     lost_confidence_threshold: float = 0.35
@@ -34,6 +34,7 @@ class TrackingSettings:
     default_selection_height_fraction: float = 0.2
     template_crop_scale: float = 1.0
     search_crop_scale: float = 2.0
+    track_max_width: int = 640
 
 
 @dataclass(slots=True)

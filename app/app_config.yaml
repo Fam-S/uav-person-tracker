@@ -10,7 +10,7 @@ video:
   keep_aspect_ratio: true
 
 tracking:
-  backend: traditional_tracker
+  backend: csrt
   checkpoint: null
   uncertain_confidence_threshold: 0.55
   lost_confidence_threshold: 0.35
@@ -20,6 +20,7 @@ tracking:
   default_selection_height_fraction: 0.2
   template_crop_scale: 1.0
   search_crop_scale: 2.0
+  track_max_width: 640
 
 overlay:
   show_confidence: true

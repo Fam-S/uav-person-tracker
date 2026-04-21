@@ -8,16 +8,15 @@ Version 1 is a **single-window desktop GUI for recorded-video person tracking**.
 
 ## Current V1 Status
 
-The app has been implemented as a small `tkinter`-based package inside `app/`.
+The app has been implemented as a small `PySide6`-based package inside `app/`.
 
 Current files:
 
 - `main.py` - app entry point
 - `config.py` - config loading and validation
-- `controller.py` - app workflow, playback loop, and state handling
-- `ui.py` - `tkinter` window, video canvas, controls, and status display
+- `controller.py` - app workflow, worker thread, render loop, and state handling
+- `ui.py` - `PySide6` window, video surface, controls, and status display
 - `tracking.py` - backend interface, backend factory, and local backends
-- `traditional_tracker.py` - stronger traditional tracker in a self-contained file
 - `app_config.yaml` - app-level settings
 
 ## V1 Direction
@@ -30,9 +29,18 @@ The current product direction is:
 - recorded video only for version 1
 - future support for both file input and live input
 
+## Threading Architecture
+
+The controller uses a producer-consumer design to keep the UI responsive at 30 fps regardless of tracker speed:
+
+- **Worker thread** runs `cap.read()` + `backend.track()` in a tight loop and puts results into a bounded queue (maxsize=2). If the queue is full, the oldest frame is dropped so the renderer always gets the latest result.
+- **Render timer** fires on the Qt main thread every 33 ms. If the queue is empty (tracker hasn't finished yet), it reschedules without blocking. When a result arrives, it renders and reschedules.
+
+This means the Qt event loop is never blocked by the tracker, so buttons, repaints, and resize events all remain responsive during tracking.
+
 ## Framework Choice
 
-The selected framework for version 1 is **tkinter**.
+The selected framework for version 1 is **PySide6**.
 
 Why:
 
@@ -134,6 +142,7 @@ Main settings include:
 - default selection size
 - template crop scale
 - search crop scale
+- `track_max_width` — frames are downscaled to at most this width before being sent to the tracker (default: 640). Lower values are faster; results are scaled back to original coordinates before display.
 - overlay toggles
 
 The YAML intentionally keeps only the settings that are useful to change quickly.
@@ -144,7 +153,7 @@ Example:
 
 ```yaml
 tracking:
-  backend: traditional_tracker
+  backend: csrt
 ```
 
 ## Model Swapping Design
@@ -167,41 +176,15 @@ This keeps the UI stable even if the underlying tracker changes later.
 
 ## Current Backend Options
 
-The current V1 implementation includes three backend options selected from `app_config.yaml`:
+The current V1 implementation includes two backend options selected from `app_config.yaml`:
 
-- `traditional_tracker`
-- `template_match`
 - `mock`
 
-### `traditional_tracker`
+### `csrt`
 
 This is the current default backend.
 
-It is a stronger traditional tracker implemented in `traditional_tracker.py` and stays fully contained inside `app/`.
-
-Current improvements over the baseline tracker:
-
-- better matching features using grayscale, gradient structure, and lighter HSV histogram similarity
-- multi-scale search
-- light motion prior using velocity
-- stronger state logic using confidence, jump size, and score stability
-- conservative candidate acceptance using initial-appearance and response-separation checks
-
-The current implementation intentionally stays conservative:
-
-- local search only
-- frozen first-frame template
-- no rotation template bank
-- no re-detection stage yet
-- no heavy smoothing layer over the displayed bbox
-
-The internal tuning values for this backend currently live in `traditional_tracker.py` rather than in YAML, to keep `app_config.yaml` small and focused on high-value runtime settings.
-
-### `template_match`
-
-This is the simpler baseline backend.
-
-It uses OpenCV template matching and keeps the app self-contained inside `app/`.
+It uses OpenCV's CSRT tracker and keeps the app self-contained inside `app/`.
 
 Why this is useful for V1:
 
@@ -243,13 +226,14 @@ Important note:
 Run from the repository root using the project environment:
 
 ```bash
+uv sync --group ui
 uv run python -m app.main
 ```
 
 The app expects the repo dependencies to be available, including:
 
-- `opencv-python`
-- `pillow`
+- `opencv-contrib-python` (required for the CSRT tracking module)
+- `PySide6`
 - `pyyaml`
 
 ## Scope Limits For V1

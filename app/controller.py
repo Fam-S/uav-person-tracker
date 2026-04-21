@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import queue
+import threading
 from collections import deque
 from pathlib import Path
 from time import perf_counter
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
 from app.config import AppConfig
 from app.tracking import BBox, TrackerBackend, TrackingResult
+
+if TYPE_CHECKING:
+    pass
+
+# Sentinel placed in the result queue when the worker reaches end of video.
+_EOF = object()
 
 
 class AppController:
@@ -30,9 +39,21 @@ class AppController:
         self.last_fps: float | None = None
         self._last_command: tuple[str, float] | None = None
         self._smoothed_velocity: np.ndarray | None = None
-        self.tick_after_id = None
+
+        # render timer handle — non-None means tracking is running
+        self.tick_timer = None
         self.backend_initialized = False
         self.last_tick_started_at: float | None = None
+
+        # worker thread state
+        self._stop_event = threading.Event()
+        self._worker_thread: threading.Thread | None = None
+        # maxsize=2: renderer always gets the latest frame; old frames are dropped
+        self._result_queue: queue.Queue = queue.Queue(maxsize=2)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def bind_ui(self, ui) -> None:
         self.ui = ui
@@ -59,6 +80,7 @@ class AppController:
             self.ui.show_error("Open Video", "Could not read the first frame from the selected video.")
             return
 
+        self._stop_worker()
         self._release_capture()
         self.capture = new_capture
         self.video_path = video_path
@@ -128,13 +150,16 @@ class AppController:
             self.current_bbox = self.selected_bbox
 
         self.state = "Tracking"
+        self.last_tick_started_at = None
         self.ui.add_event("Tracking started")
-        self._schedule_next_tick(initial=True)
+        self._start_worker()
+        self._schedule_render_tick()
         self._sync_ui_state()
 
     def pause_tracking(self) -> None:
         if self.state not in {"Tracking", "Lost", "Uncertain"}:
             return
+        self._stop_worker()
         self._cancel_tick()
         self.state = "Paused"
         if self.ui is not None:
@@ -145,6 +170,7 @@ class AppController:
         if self.capture is None or self.ui is None:
             return
 
+        self._stop_worker()
         self._cancel_tick()
         self.backend.reset()
         self.backend_initialized = False
@@ -177,25 +203,85 @@ class AppController:
             self._render_current_frame()
 
     def shutdown(self) -> None:
+        self._stop_worker()
         self._cancel_tick()
         self._release_capture()
 
-    def _tick(self) -> None:
-        self.tick_after_id = None
-        if self.capture is None or self.current_frame is None:
+    # ------------------------------------------------------------------
+    # Worker thread (runs CSRT off the main thread)
+    # ------------------------------------------------------------------
+
+    def _start_worker(self) -> None:
+        self._stop_event.clear()
+        # drain any stale results from a previous run
+        while not self._result_queue.empty():
+            try:
+                self._result_queue.get_nowait()
+            except queue.Empty:
+                break
+        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self._worker_thread.start()
+
+    def _stop_worker(self) -> None:
+        self._stop_event.set()
+        if self._worker_thread is not None:
+            self._worker_thread.join(timeout=0.5)
+            self._worker_thread = None
+
+    def _worker_loop(self) -> None:
+        while not self._stop_event.is_set():
+            if self.capture is None:
+                break
+            success, frame = self.capture.read()
+            if not success or frame is None:
+                self._result_queue.put(_EOF)
+                break
+            result = self.backend.track(frame)
+            item = (frame, result)
+            # drop oldest if full so renderer always gets the latest frame
+            if self._result_queue.full():
+                try:
+                    self._result_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            self._result_queue.put(item)
+
+    # ------------------------------------------------------------------
+    # Render tick (fires on the main thread at target_fps)
+    # ------------------------------------------------------------------
+
+    def _schedule_render_tick(self) -> None:
+        if self.ui is None:
+            return
+        interval_ms = max(1, int(1000 / self.config.video.target_fps))
+        self.tick_timer = self.ui.schedule(interval_ms, self._render_tick)
+
+    def _render_tick(self) -> None:
+        self.tick_timer = None
+
+        try:
+            item = self._result_queue.get_nowait()
+        except queue.Empty:
+            # worker hasn't produced a frame yet — redraw last known state and wait
+            self._schedule_render_tick()
             return
 
-        tick_started_at = perf_counter()
-        success, frame = self.capture.read()
-        if not success or frame is None:
+        if item is _EOF:
             self.state = "Paused"
             if self.ui is not None:
                 self.ui.add_event("Reached end of video")
             self._sync_ui_state()
             return
 
+        frame, result = item
+        now = perf_counter()
+        if self.last_tick_started_at is not None:
+            elapsed = now - self.last_tick_started_at
+            if elapsed > 0:
+                self.last_fps = 1.0 / elapsed
+        self.last_tick_started_at = now
+
         self.current_frame = frame
-        result = self.backend.track(frame)
         self.current_bbox = result.bbox
         self.last_confidence = result.confidence
         self.last_latency_ms = result.latency_ms
@@ -205,29 +291,18 @@ class AppController:
         self.ui.set_persistent_selection_box(result.bbox)
         self._send_drone_command()
 
-        if self.last_tick_started_at is not None:
-            elapsed = tick_started_at - self.last_tick_started_at
-            if elapsed > 0:
-                self.last_fps = 1.0 / elapsed
-        self.last_tick_started_at = tick_started_at
-
         self._render_current_frame()
-        self._schedule_next_tick()
+        self._schedule_render_tick()
         self._sync_ui_state()
 
-    def _schedule_next_tick(self, *, initial: bool = False) -> None:
-        if self.ui is None:
-            return
-        self._cancel_tick()
-        if initial:
-            self.last_tick_started_at = None
-        interval_ms = max(1, int(1000 / self.config.video.target_fps))
-        self.tick_after_id = self.ui.schedule(interval_ms, self._tick)
-
     def _cancel_tick(self) -> None:
-        if self.ui is not None and self.tick_after_id is not None:
-            self.ui.cancel_scheduled(self.tick_after_id)
-        self.tick_after_id = None
+        if self.ui is not None and self.tick_timer is not None:
+            self.ui.cancel_scheduled(self.tick_timer)
+        self.tick_timer = None
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     def _release_capture(self) -> None:
         if self.capture is not None:
@@ -238,10 +313,12 @@ class AppController:
         if self.ui is None:
             return
 
-        is_running = self.tick_after_id is not None
+        is_running = self.tick_timer is not None
         can_select = self.current_frame is not None and not is_running
         can_start = (
-            not is_running and self.selected_bbox is not None and self.state in {"Target Selected", "Paused", "Lost", "Uncertain"}
+            not is_running
+            and self.selected_bbox is not None
+            and self.state in {"Target Selected", "Paused", "Lost", "Uncertain"}
         )
         can_pause = is_running and self.state in {"Tracking", "Lost", "Uncertain"}
         can_reset = self.capture is not None
@@ -338,7 +415,6 @@ class AppController:
                     force = min(100, int(abs_vy * 10))
             if self._last_command != (direction, force):
                 self._last_command = (direction, force)
-                print(f"COMMAND: {direction} {force}%")
                 self.ui.set_command(direction, force)
         except (AttributeError, TypeError, ValueError):
             pass

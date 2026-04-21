@@ -1,115 +1,253 @@
 from __future__ import annotations
 
-import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox
 
 import cv2
-from PIL import Image, ImageTk
+import numpy as np
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.config import AppConfig
 
 
-class MainWindow:
-    def __init__(self, config: AppConfig) -> None:
-        self.config = config
-        self.root = tk.Tk()
-        self.root.title(config.app.title)
-        self.root.geometry(f"{config.app.width}x{config.app.height}")
-        self.root.minsize(config.app.min_width, config.app.min_height)
-        self.root.configure(bg="#111111")
+class VideoWidget(QWidget):
+    """Custom video surface that renders the frame and selection overlays."""
 
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        self._frame_bgr: np.ndarray | None = None
+        self._frame_buffer: np.ndarray | None = None
+        self._qimage: QImage | None = None
+        self._frame_size = (1, 1)
+        self._display_box = (0, 0, 1, 1)
+        self._target_bbox: tuple[int, int, int, int] | None = None
+        self._template_bbox: tuple[int, int, int, int] | None = None
+        self._search_bbox: tuple[int, int, int, int] | None = None
+        self._keep_aspect_ratio = True
+        self.on_mouse_press = None
+        self.on_mouse_move = None
+        self.on_mouse_release = None
+
+    @property
+    def frame_size(self) -> tuple[int, int]:
+        return self._frame_size
+
+    @property
+    def display_box(self) -> tuple[int, int, int, int]:
+        return self._display_box
+
+    def set_keep_aspect_ratio(self, enabled: bool) -> None:
+        self._keep_aspect_ratio = enabled
+        self._render_frame()
+
+    def set_frame(self, frame_bgr: np.ndarray) -> None:
+        self._frame_bgr = frame_bgr
+        self._render_frame()
+
+    def refresh(
+        self,
+        frame_bgr: np.ndarray,
+        target_bbox: tuple[int, int, int, int] | None,
+        template_bbox: tuple[int, int, int, int] | None,
+        search_bbox: tuple[int, int, int, int] | None,
+    ) -> None:
+        """Set frame + overlay in one shot — single repaint."""
+        self._frame_bgr = frame_bgr
+        frame_h, frame_w = frame_bgr.shape[:2]
+        self._frame_size = (frame_w, frame_h)
+        widget_w = max(1, self.width())
+        widget_h = max(1, self.height())
+        render_w, render_h, offset_x, offset_y = self._compute_render_box(frame_w, frame_h, widget_w, widget_h)
+        self._display_box = (offset_x, offset_y, render_w, render_h)
+        resized = cv2.resize(frame_bgr, (render_w, render_h), interpolation=cv2.INTER_LINEAR)
+        self._frame_buffer = resized
+        self._qimage = QImage(resized.data, render_w, render_h, resized.strides[0], QImage.Format.Format_BGR888)
+        self._target_bbox = target_bbox
+        self._template_bbox = template_bbox
+        self._search_bbox = search_bbox
+        self.update()
+
+    def set_selection_overlay(
+        self,
+        target_bbox: tuple[int, int, int, int] | None,
+        template_bbox: tuple[int, int, int, int] | None,
+        search_bbox: tuple[int, int, int, int] | None,
+    ) -> None:
+        self._target_bbox = target_bbox
+        self._template_bbox = template_bbox
+        self._search_bbox = search_bbox
+        self.update()
+
+    def clear_selection_overlay(self) -> None:
+        self._target_bbox = None
+        self._template_bbox = None
+        self._search_bbox = None
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        _ = event
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#0d0d0d"))
+
+        if self._qimage is not None:
+            offset_x, offset_y, _, _ = self._display_box
+            painter.drawImage(QPoint(offset_x, offset_y), self._qimage)
+            self._paint_overlays(painter)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self._render_frame()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self.on_mouse_press is not None:
+            self.on_mouse_press(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self.on_mouse_move is not None:
+            self.on_mouse_move(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self.on_mouse_release is not None:
+            self.on_mouse_release(event)
+
+    def _render_frame(self) -> None:
+        if self._frame_bgr is None:
+            self._frame_size = (1, 1)
+            self._display_box = (0, 0, 1, 1)
+            self._qimage = None
+            self._frame_buffer = None
+            self.update()
+            return
+
+        frame_h, frame_w = self._frame_bgr.shape[:2]
+        self._frame_size = (frame_w, frame_h)
+
+        widget_w = max(1, self.width())
+        widget_h = max(1, self.height())
+        render_w, render_h, offset_x, offset_y = self._compute_render_box(frame_w, frame_h, widget_w, widget_h)
+        self._display_box = (offset_x, offset_y, render_w, render_h)
+
+        resized = cv2.resize(self._frame_bgr, (render_w, render_h), interpolation=cv2.INTER_LINEAR)
+        self._frame_buffer = resized
+        self._qimage = QImage(
+            resized.data,
+            render_w,
+            render_h,
+            resized.strides[0],
+            QImage.Format.Format_BGR888,
+        )
+        self.update()
+
+    def _paint_overlays(self, painter: QPainter) -> None:
+        if self._template_bbox is not None:
+            self._draw_rect(painter, self._template_bbox, "#7be495", dash=True, label="Template Crop")
+        if self._search_bbox is not None:
+            self._draw_rect(painter, self._search_bbox, "#5aa0ff", dash=True, label="Search Crop")
+        if self._target_bbox is not None:
+            self._draw_rect(painter, self._target_bbox, "#4fd36d", label="Target")
+            target_box = self._frame_bbox_to_display_bbox(self._target_bbox)
+            if target_box is not None:
+                dx, dy, dw, dh = target_box
+                pen = QPen(QColor("#4fd36d"), 2)
+                painter.setPen(pen)
+                painter.drawLine(dx, dy, dx + dw, dy + dh)
+                painter.drawLine(dx + dw, dy, dx, dy + dh)
+
+    def _draw_rect(
+        self,
+        painter: QPainter,
+        bbox: tuple[int, int, int, int],
+        color_hex: str,
+        *,
+        dash: bool = False,
+        label: str = "",
+    ) -> None:
+        display_bbox = self._frame_bbox_to_display_bbox(bbox)
+        if display_bbox is None:
+            return
+
+        dx, dy, dw, dh = display_bbox
+        pen = QPen(QColor(color_hex), 2)
+        if dash:
+            pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.drawRect(QRect(dx, dy, dw, dh))
+        if label:
+            painter.setFont(QFont("Segoe UI", 10))
+            painter.drawText(QPoint(dx, max(16, dy - 10)), label)
+
+    def _frame_bbox_to_display_bbox(self, bbox: tuple[int, int, int, int]) -> tuple[int, int, int, int] | None:
+        offset_x, offset_y, render_w, render_h = self._display_box
+        frame_w, frame_h = self._frame_size
+        if render_w <= 1 or render_h <= 1 or frame_w <= 0 or frame_h <= 0:
+            return None
+
+        x, y, w, h = bbox
+        scale_x = render_w / frame_w
+        scale_y = render_h / frame_h
+        dx = int(round(offset_x + x * scale_x))
+        dy = int(round(offset_y + y * scale_y))
+        dw = max(1, int(round(w * scale_x)))
+        dh = max(1, int(round(h * scale_y)))
+        return (dx, dy, dw, dh)
+
+    def _compute_render_box(self, frame_w: int, frame_h: int, widget_w: int, widget_h: int) -> tuple[int, int, int, int]:
+        if not self._keep_aspect_ratio:
+            return (widget_w, widget_h, 0, 0)
+
+        frame_ratio = frame_w / frame_h
+        widget_ratio = widget_w / widget_h
+        if frame_ratio > widget_ratio:
+            render_w = widget_w
+            render_h = max(1, int(widget_w / frame_ratio))
+        else:
+            render_h = widget_h
+            render_w = max(1, int(widget_h * frame_ratio))
+
+        offset_x = max(0, (widget_w - render_w) // 2)
+        offset_y = max(0, (widget_h - render_h) // 2)
+        return (render_w, render_h, offset_x, offset_y)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, config: AppConfig) -> None:
+        super().__init__()
+        self.config = config
         self.controller = None
         self.selection_enabled = False
         self.selection_center_frame: tuple[float, float] | None = None
         self.selection_bbox_frame: tuple[int, int, int, int] | None = None
         self.persistent_bbox_frame: tuple[int, int, int, int] | None = None
-        self.selection_rect_id: int | None = None
-        self.template_rect_id: int | None = None
-        self.search_rect_id: int | None = None
-        self.selection_cross_ids: list[int] = []
-        self.selection_label_id: int | None = None
-        self.template_label_id: int | None = None
-        self.search_label_id: int | None = None
-        self.rendered_image = None
-        self.image_id: int | None = None
         self.current_frame_size = (1, 1)
         self.display_box = (0, 0, 1, 1)
 
+        self.setWindowTitle(config.app.title)
+        self.resize(config.app.width, config.app.height)
+        self.setMinimumSize(config.app.min_width, config.app.min_height)
+
+        self._tick_timer = QTimer(self)
+        self._tick_timer.setSingleShot(True)
+        self._tick_callback = None
+        self._tick_timer.timeout.connect(self._on_tick_timer)
+
         self._build_layout()
         self._build_bindings()
-
-    def _build_layout(self) -> None:
-        self.root.grid_rowconfigure(0, weight=1)
-        self.root.grid_rowconfigure(1, weight=0)
-        self.root.grid_columnconfigure(0, weight=3)
-        self.root.grid_columnconfigure(1, weight=1)
-
-        self.video_canvas = tk.Canvas(self.root, bg="#0d0d0d", highlightthickness=0, cursor="crosshair")
-        self.video_canvas.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=(12, 6))
-
-        self.sidebar = tk.Frame(self.root, bg="#1a1a1a", padx=12, pady=12)
-        self.sidebar.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=(12, 6))
-        self.sidebar.grid_columnconfigure(0, weight=1)
-        self.sidebar.grid_rowconfigure(7, weight=1)
-
-        self.status_bar = tk.Frame(self.root, bg="#151515", padx=12, pady=8)
-        self.status_bar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(6, 12))
-        for index in range(6):
-            self.status_bar.grid_columnconfigure(index, weight=1)
-
-        button_style = {
-            "bg": "#2a2a2a",
-            "fg": "#f0f0f0",
-            "activebackground": "#3a3a3a",
-            "activeforeground": "#ffffff",
-            "bd": 0,
-            "relief": "flat",
-            "padx": 10,
-            "pady": 10,
-        }
-        label_style = {"bg": "#1a1a1a", "fg": "#f0f0f0", "anchor": "w"}
-
-        self.open_button = tk.Button(self.sidebar, text="Open Video", command=self._on_open_video, **button_style)
-        self.select_button = tk.Button(self.sidebar, text="Select Target", command=self._on_select_target, **button_style)
-        self.start_button = tk.Button(self.sidebar, text="Start", command=self._on_start, **button_style)
-        self.pause_button = tk.Button(self.sidebar, text="Pause", command=self._on_pause, **button_style)
-        self.reset_button = tk.Button(self.sidebar, text="Reset", command=self._on_reset, **button_style)
-
-        self.open_button.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        self.select_button.grid(row=1, column=0, sticky="ew", pady=8)
-        self.start_button.grid(row=2, column=0, sticky="ew", pady=8)
-        self.pause_button.grid(row=3, column=0, sticky="ew", pady=8)
-        self.reset_button.grid(row=4, column=0, sticky="ew", pady=8)
-
-        tk.Label(self.sidebar, text="Events", font=("Segoe UI", 11, "bold"), **label_style).grid(
-            row=5, column=0, sticky="ew", pady=(16, 8)
-        )
-        self.events_list = tk.Listbox(
-            self.sidebar,
-            bg="#101010",
-            fg="#e6e6e6",
-            bd=0,
-            highlightthickness=0,
-            activestyle="none",
-        )
-        self.events_list.grid(row=6, column=0, rowspan=2, sticky="nsew")
-
-        status_style = {"bg": "#151515", "fg": "#f0f0f0", "anchor": "w"}
-        self.fps_var = tk.StringVar(value="FPS: --")
-        self.confidence_var = tk.StringVar(value="Confidence: --")
-        self.latency_var = tk.StringVar(value="Latency: --")
-        self.state_var = tk.StringVar(value="State: Idle")
-        self.backend_var = tk.StringVar(value="Backend: --")
-        self.hint_var = tk.StringVar(value="Hint: Open a video to begin")
-
-        tk.Label(self.status_bar, textvariable=self.fps_var, **status_style).grid(row=0, column=0, sticky="ew")
-        tk.Label(self.status_bar, textvariable=self.confidence_var, **status_style).grid(row=0, column=1, sticky="ew")
-        tk.Label(self.status_bar, textvariable=self.latency_var, **status_style).grid(row=0, column=2, sticky="ew")
-        tk.Label(self.status_bar, textvariable=self.state_var, **status_style).grid(row=0, column=3, sticky="ew")
-        tk.Label(self.status_bar, textvariable=self.backend_var, **status_style).grid(row=0, column=4, sticky="ew")
-        tk.Label(self.status_bar, textvariable=self.hint_var, **status_style).grid(row=1, column=0, columnspan=6, sticky="ew", pady=(6, 0))
-
         self.set_button_states(
             open_enabled=True,
             select_enabled=False,
@@ -118,122 +256,124 @@ class MainWindow:
             reset_enabled=False,
         )
 
-    def _build_bindings(self) -> None:
-        self.video_canvas.bind("<ButtonPress-1>", self._on_canvas_press)
-        self.video_canvas.bind("<B1-Motion>", self._on_canvas_drag)
-        self.video_canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
-        self.video_canvas.bind("<Configure>", self._on_canvas_resize)
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+    def _build_layout(self) -> None:
+        central = QWidget()
+        central.setObjectName("central")
+        self.setCentralWidget(central)
 
-    def bind_controller(self, controller) -> None:
-        self.controller = controller
+        root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(12, 12, 12, 12)
+        root_layout.setSpacing(12)
 
-    def ask_video_path(self) -> str | None:
-        filetypes = [
-            ("Video files", "*.mp4 *.avi *.mov *.mkv *.mpeg *.mpg"),
-            ("All files", "*.*"),
-        ]
-        path = filedialog.askopenfilename(title="Open Video", filetypes=filetypes)
-        return path or None
+        self.video_widget = VideoWidget()
+        self.video_widget.setObjectName("video_widget")
+        self.video_widget.set_keep_aspect_ratio(self.config.video.keep_aspect_ratio)
+        root_layout.addWidget(self.video_widget, stretch=3)
 
-    def show_frame(self, frame_bgr) -> None:
-        frame_h, frame_w = frame_bgr.shape[:2]
-        self.current_frame_size = (frame_w, frame_h)
+        sidebar = QWidget()
+        sidebar.setObjectName("sidebar")
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(12, 12, 12, 12)
+        sidebar_layout.setSpacing(8)
 
-        canvas_w = max(self.video_canvas.winfo_width(), 2)
-        canvas_h = max(self.video_canvas.winfo_height(), 2)
-        render_w, render_h, offset_x, offset_y = self._compute_render_box(frame_w, frame_h, canvas_w, canvas_h)
-        self.display_box = (offset_x, offset_y, render_w, render_h)
-
-        resized = cv2.resize(frame_bgr, (render_w, render_h), interpolation=cv2.INTER_LINEAR)
-        frame_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        self.rendered_image = ImageTk.PhotoImage(image=Image.fromarray(frame_rgb))
-
-        if self.image_id is None:
-            self.image_id = self.video_canvas.create_image(
-                offset_x, offset_y, anchor="nw", image=self.rendered_image, tags="frame"
-            )
-        else:
-            self.video_canvas.itemconfig(self.image_id, image=self.rendered_image)
-            self.video_canvas.coords(self.image_id, offset_x, offset_y)
-        self._redraw_selection_overlay()
-
-    def set_button_states(
-        self,
-        *,
-        open_enabled: bool,
-        select_enabled: bool,
-        start_enabled: bool,
-        pause_enabled: bool,
-        reset_enabled: bool,
-    ) -> None:
-        self._set_button_state(self.open_button, open_enabled)
-        self._set_button_state(self.select_button, select_enabled)
-        self._set_button_state(self.start_button, start_enabled)
-        self._set_button_state(self.pause_button, pause_enabled)
-        self._set_button_state(self.reset_button, reset_enabled)
-
-    def update_status(self, *, fps: float | None, confidence: float | None, latency_ms: float | None, state: str) -> None:
-        self.fps_var.set(f"FPS: {fps:.1f}" if fps is not None else "FPS: --")
-        self.confidence_var.set(
-            f"Confidence: {confidence:.2f}" if confidence is not None else "Confidence: --"
+        button_style = """
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #f0f0f0;
+                border: 0;
+                padding: 10px;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+            }
+            QPushButton:disabled {
+                background-color: #1f1f1f;
+                color: #808080;
+            }
+        """
+        sidebar.setStyleSheet(
+            """
+            QWidget#sidebar {
+                background-color: #1a1a1a;
+                color: #f0f0f0;
+            }
+            QListWidget {
+                background-color: #101010;
+                color: #e6e6e6;
+                border: 0;
+            }
+            """
         )
-        self.latency_var.set(f"Latency: {latency_ms:.1f} ms" if latency_ms is not None else "Latency: --")
-        self.state_var.set(f"State: {state}")
 
-    def add_event(self, message: str) -> None:
-        self.events_list.insert(0, message)
-        while self.events_list.size() > 50:
-            self.events_list.delete(tk.END)
+        self.open_button = QPushButton("Open Video")
+        self.select_button = QPushButton("Select Target")
+        self.start_button = QPushButton("Start")
+        self.pause_button = QPushButton("Pause")
+        self.reset_button = QPushButton("Reset")
+        for button in [self.open_button, self.select_button, self.start_button, self.pause_button, self.reset_button]:
+            button.setStyleSheet(button_style)
+            sidebar_layout.addWidget(button)
 
-    def set_hint(self, message: str) -> None:
-        self.hint_var.set(f"Hint: {message}")
+        events_label = QLabel("Events")
+        events_label.setStyleSheet("color: #f0f0f0; font-weight: bold;")
+        sidebar_layout.addWidget(events_label)
 
-    def set_backend_name(self, backend_name: str) -> None:
-        self.backend_var.set(f"Backend: {backend_name}")
+        self.events_list = QListWidget()
+        sidebar_layout.addWidget(self.events_list, stretch=1)
+        root_layout.addWidget(sidebar, stretch=1)
 
-    def set_command(self, direction: str, force: float) -> None:
-        msg = "Stay" if direction == "Stationary" else f"{direction} {force:.0f}%"
-        self.events_list.insert(0, msg)
-        while self.events_list.size() > 50:
-            self.events_list.delete(tk.END)
+        status_bar = QStatusBar(self)
+        status_bar.setStyleSheet(
+            """
+            QStatusBar {
+                background-color: #151515;
+                color: #f0f0f0;
+            }
+            """
+        )
+        self.setStatusBar(status_bar)
 
-    def enable_target_selection(self) -> None:
-        self.selection_enabled = True
-        self.selection_center_frame = None
-        self.selection_bbox_frame = self.persistent_bbox_frame
-        self._clear_selection_overlay()
-        self.add_event("Click target center, then drag to resize")
-        self.set_hint("Click the target center, then drag to resize the target box")
+        status_style = "color: #f0f0f0;"
+        self.fps_label = QLabel("FPS: --")
+        self.confidence_label = QLabel("Confidence: --")
+        self.latency_label = QLabel("Latency: --")
+        self.state_label = QLabel("State: Idle")
+        self.backend_label = QLabel("Backend: --")
+        self.hint_label = QLabel("Hint: Open a video to begin")
+        for label in [
+            self.fps_label,
+            self.confidence_label,
+            self.latency_label,
+            self.state_label,
+            self.backend_label,
+        ]:
+            label.setStyleSheet(status_style)
+            status_bar.addWidget(label)
+        self.hint_label.setStyleSheet(status_style)
+        status_bar.addPermanentWidget(self.hint_label, 1)
 
-    def clear_selection_box(self) -> None:
-        self.selection_enabled = False
-        self.selection_center_frame = None
-        self.selection_bbox_frame = None
-        self.persistent_bbox_frame = None
-        self._clear_selection_overlay()
+        self.setStyleSheet(
+            """
+            QMainWindow {
+                background-color: #111111;
+            }
+            QWidget#central {
+                background-color: #111111;
+            }
+            """
+        )
 
-    def set_persistent_selection_box(self, bbox: tuple[int, int, int, int] | None) -> None:
-        self.persistent_bbox_frame = bbox
-        if not self.selection_enabled:
-            self.selection_bbox_frame = bbox
-        self._redraw_selection_overlay()
+        self.open_button.clicked.connect(self._on_open_video)
+        self.select_button.clicked.connect(self._on_select_target)
+        self.start_button.clicked.connect(self._on_start)
+        self.pause_button.clicked.connect(self._on_pause)
+        self.reset_button.clicked.connect(self._on_reset)
 
-    def show_error(self, title: str, message: str) -> None:
-        messagebox.showerror(title, message)
-
-    def show_info(self, title: str, message: str) -> None:
-        messagebox.showinfo(title, message)
-
-    def schedule(self, delay_ms: int, callback):
-        return self.root.after(delay_ms, callback)
-
-    def cancel_scheduled(self, callback_id) -> None:
-        if callback_id is not None:
-            self.root.after_cancel(callback_id)
-
-    def run(self) -> None:
-        self.root.mainloop()
+    def _build_bindings(self) -> None:
+        self.video_widget.on_mouse_press = self._on_canvas_press
+        self.video_widget.on_mouse_move = self._on_canvas_drag
+        self.video_widget.on_mouse_release = self._on_canvas_release
 
     def _on_open_video(self) -> None:
         if self.controller is not None:
@@ -255,20 +395,124 @@ class MainWindow:
         if self.controller is not None:
             self.controller.reset_tracking()
 
-    def _on_close(self) -> None:
+    def bind_controller(self, controller) -> None:
+        self.controller = controller
+
+    def ask_video_path(self) -> str | None:
+        filetypes = "Video files (*.mp4 *.avi *.mov *.mkv *.mpeg *.mpg);;All files (*)"
+        path, _ = QFileDialog.getOpenFileName(self, "Open Video", "", filetypes)
+        return path or None
+
+    def show_frame(self, frame_bgr) -> None:
+        overlay = self.selection_bbox_frame or self.persistent_bbox_frame
+        if overlay is not None:
+            template = self._template_crop_from_target(overlay)
+            search = self._search_crop_from_target(overlay)
+        else:
+            template = search = None
+        self.video_widget.refresh(frame_bgr, overlay, template, search)
+        self.current_frame_size = self.video_widget.frame_size
+        self.display_box = self.video_widget.display_box
+
+    def set_button_states(
+        self,
+        *,
+        open_enabled: bool,
+        select_enabled: bool,
+        start_enabled: bool,
+        pause_enabled: bool,
+        reset_enabled: bool,
+    ) -> None:
+        self._set_button_state(self.open_button, open_enabled)
+        self._set_button_state(self.select_button, select_enabled)
+        self._set_button_state(self.start_button, start_enabled)
+        self._set_button_state(self.pause_button, pause_enabled)
+        self._set_button_state(self.reset_button, reset_enabled)
+
+    def update_status(self, *, fps: float | None, confidence: float | None, latency_ms: float | None, state: str) -> None:
+        self.fps_label.setText(f"FPS: {fps:.1f}" if fps is not None else "FPS: --")
+        self.confidence_label.setText(
+            f"Confidence: {confidence:.2f}" if confidence is not None else "Confidence: --"
+        )
+        self.latency_label.setText(f"Latency: {latency_ms:.1f} ms" if latency_ms is not None else "Latency: --")
+        self.state_label.setText(f"State: {state}")
+
+    def add_event(self, message: str) -> None:
+        self.events_list.insertItem(0, message)
+        while self.events_list.count() > 50:
+            self.events_list.takeItem(self.events_list.count() - 1)
+
+    def set_hint(self, message: str) -> None:
+        self.hint_label.setText(f"Hint: {message}")
+
+    def set_backend_name(self, backend_name: str) -> None:
+        self.backend_label.setText(f"Backend: {backend_name}")
+
+    def set_command(self, direction: str, force: float) -> None:
+        msg = "Stay" if direction == "Stationary" else f"{direction} {force:.0f}%"
+        self.add_event(msg)
+
+    def enable_target_selection(self) -> None:
+        self.selection_enabled = True
+        self.selection_center_frame = None
+        self.selection_bbox_frame = self.persistent_bbox_frame
+        self._redraw_selection_overlay()
+        self.add_event("Click target center, then drag to resize")
+        self.set_hint("Click the target center, then drag to resize the target box")
+
+    def clear_selection_box(self) -> None:
+        self.selection_enabled = False
+        self.selection_center_frame = None
+        self.selection_bbox_frame = None
+        self.persistent_bbox_frame = None
+        self._clear_selection_overlay()
+
+    def set_persistent_selection_box(self, bbox: tuple[int, int, int, int] | None) -> None:
+        self.persistent_bbox_frame = bbox
+        if not self.selection_enabled:
+            self.selection_bbox_frame = bbox
+        self._redraw_selection_overlay()
+
+    def show_error(self, title: str, message: str) -> None:
+        QMessageBox.critical(self, title, message)
+
+    def show_info(self, title: str, message: str) -> None:
+        QMessageBox.information(self, title, message)
+
+    def _on_tick_timer(self) -> None:
+        if self._tick_callback is not None:
+            self._tick_callback()
+
+    def schedule(self, delay_ms: int, callback) -> QTimer:
+        self._tick_callback = callback
+        self._tick_timer.start(delay_ms)
+        return self._tick_timer
+
+    def cancel_scheduled(self, _timer: QTimer | None) -> None:
+        self._tick_timer.stop()
+        self._tick_callback = None
+
+    def run(self) -> None:
+        pass
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self.controller is not None:
             self.controller.shutdown()
-        self.root.destroy()
+        event.accept()
 
-    def _on_canvas_resize(self, event) -> None:
-        _ = event
-        if self.controller is not None:
-            self.controller.refresh_current_frame()
+    def set_window_title(self, title: str) -> None:
+        self.setWindowTitle(title)
+
+    def set_video_label(self, video_path: str | None) -> None:
+        if video_path is None:
+            self.set_window_title(self.config.app.title)
+            return
+        self.set_window_title(f"{self.config.app.title} - {Path(video_path).name}")
 
     def _on_canvas_press(self, event) -> None:
         if not self.selection_enabled:
             return
-        frame_point = self._display_point_to_frame_point(event.x, event.y)
+        frame_point = self._display_point_to_frame_point(event.position().x(), event.position().y())
         if frame_point is None:
             return
         self.selection_center_frame = frame_point
@@ -278,7 +522,7 @@ class MainWindow:
     def _on_canvas_drag(self, event) -> None:
         if not self.selection_enabled or self.selection_center_frame is None:
             return
-        frame_point = self._display_point_to_frame_point(event.x, event.y)
+        frame_point = self._display_point_to_frame_point(event.position().x(), event.position().y())
         if frame_point is None:
             return
         self.selection_bbox_frame = self._selection_bbox_from_drag(frame_point)
@@ -300,7 +544,7 @@ class MainWindow:
         if self.controller is not None:
             self.controller.on_target_selected(frame_bbox)
 
-    def _display_point_to_frame_point(self, x: int, y: int) -> tuple[float, float] | None:
+    def _display_point_to_frame_point(self, x: float, y: float) -> tuple[float, float] | None:
         offset_x, offset_y, render_w, render_h = self.display_box
         frame_w, frame_h = self.current_frame_size
         if render_w <= 1 or render_h <= 1:
@@ -344,7 +588,10 @@ class MainWindow:
         return self._fit_bbox_to_frame(self._bbox_from_center_and_size(self.selection_center_frame, width, height))
 
     def _bbox_from_center_and_size(
-        self, center: tuple[float, float], width: int, height: int
+        self,
+        center: tuple[float, float],
+        width: int,
+        height: int,
     ) -> tuple[int, int, int, int]:
         center_x, center_y = center
         x = int(round(center_x - width / 2))
@@ -380,78 +627,18 @@ class MainWindow:
             return None
         return (x, y, w, h)
 
-    def _ensure_overlay_items(self) -> None:
-        if self.template_rect_id is not None:
-            return
-        self.template_rect_id = self.video_canvas.create_rectangle(
-            0, 0, 1, 1, outline="#7be495", width=2, dash=(6, 4), state="hidden"
-        )
-        self.search_rect_id = self.video_canvas.create_rectangle(
-            0, 0, 1, 1, outline="#5aa0ff", width=2, dash=(8, 6), state="hidden"
-        )
-        self.selection_rect_id = self.video_canvas.create_rectangle(
-            0, 0, 1, 1, outline="#4fd36d", width=2, state="hidden"
-        )
-        self.selection_cross_ids = [
-            self.video_canvas.create_line(0, 0, 1, 1, fill="#4fd36d", width=2, state="hidden"),
-            self.video_canvas.create_line(0, 0, 1, 1, fill="#4fd36d", width=2, state="hidden"),
-        ]
-        self.selection_label_id = self.video_canvas.create_text(
-            0, 0, anchor="sw", text="Target", fill="#4fd36d",
-            font=("Segoe UI", 10, "bold"), state="hidden",
-        )
-        self.template_label_id = self.video_canvas.create_text(
-            0, 0, anchor="sw", text="Template Crop", fill="#7be495",
-            font=("Segoe UI", 10), state="hidden",
-        )
-        self.search_label_id = self.video_canvas.create_text(
-            0, 0, anchor="sw", text="Search Crop", fill="#5aa0ff",
-            font=("Segoe UI", 10), state="hidden",
-        )
-
     def _redraw_selection_overlay(self) -> None:
         overlay_bbox = self.selection_bbox_frame or self.persistent_bbox_frame
         if overlay_bbox is None:
             self._clear_selection_overlay()
             return
 
-        target_box = self._frame_bbox_to_display_bbox(overlay_bbox)
-        template_box = self._frame_bbox_to_display_bbox(self._template_crop_from_target(overlay_bbox))
-        search_box = self._frame_bbox_to_display_bbox(self._search_crop_from_target(overlay_bbox))
-        if target_box is None or template_box is None or search_box is None:
-            self._clear_selection_overlay()
-            return
-
-        self._ensure_overlay_items()
-        cx, cy, cw, ch = template_box
-        sx, sy, sw, sh = search_box
-        tx, ty, tw, th = target_box
-
-        self.video_canvas.coords(self.template_rect_id, cx, cy, cx + cw, cy + ch)
-        self.video_canvas.coords(self.search_rect_id, sx, sy, sx + sw, sy + sh)
-        self.video_canvas.coords(self.selection_rect_id, tx, ty, tx + tw, ty + th)
-        self.video_canvas.coords(self.selection_cross_ids[0], tx, ty, tx + tw, ty + th)
-        self.video_canvas.coords(self.selection_cross_ids[1], tx + tw, ty, tx, ty + th)
-        self.video_canvas.coords(self.selection_label_id, tx, max(16, ty - 10))
-        self.video_canvas.coords(self.template_label_id, cx, max(16, cy - 10))
-        self.video_canvas.coords(self.search_label_id, sx, max(16, sy - 10))
-
-        for item_id in [
-            self.template_rect_id, self.search_rect_id, self.selection_rect_id,
-            self.selection_label_id, self.template_label_id, self.search_label_id,
-            *self.selection_cross_ids,
-        ]:
-            self.video_canvas.itemconfig(item_id, state="normal")
+        template_box = self._template_crop_from_target(overlay_bbox)
+        search_box = self._search_crop_from_target(overlay_bbox)
+        self.video_widget.set_selection_overlay(overlay_bbox, template_box, search_box)
 
     def _clear_selection_overlay(self) -> None:
-        for item_id in [
-            self.template_rect_id, self.search_rect_id, self.selection_rect_id,
-            self.selection_label_id, self.template_label_id, self.search_label_id,
-        ]:
-            if item_id is not None:
-                self.video_canvas.itemconfig(item_id, state="hidden")
-        for item_id in self.selection_cross_ids:
-            self.video_canvas.itemconfig(item_id, state="hidden")
+        self.video_widget.clear_selection_overlay()
 
     def _template_crop_from_target(self, bbox: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
         x, y, w, h = bbox
@@ -476,46 +663,6 @@ class MainWindow:
         y = max(0, min(y, frame_h - final_side))
         return (x, y, final_side, final_side)
 
-    def _frame_bbox_to_display_bbox(self, bbox: tuple[int, int, int, int]) -> tuple[int, int, int, int] | None:
-        offset_x, offset_y, render_w, render_h = self.display_box
-        frame_w, frame_h = self.current_frame_size
-        if render_w <= 1 or render_h <= 1 or frame_w <= 0 or frame_h <= 0:
-            return None
-        x, y, w, h = bbox
-        scale_x = render_w / frame_w
-        scale_y = render_h / frame_h
-        dx = int(round(offset_x + x * scale_x))
-        dy = int(round(offset_y + y * scale_y))
-        dw = max(1, int(round(w * scale_x)))
-        dh = max(1, int(round(h * scale_y)))
-        return (dx, dy, dw, dh)
-
-    def _compute_render_box(self, frame_w: int, frame_h: int, canvas_w: int, canvas_h: int) -> tuple[int, int, int, int]:
-        if not self.config.video.keep_aspect_ratio:
-            return (canvas_w, canvas_h, 0, 0)
-
-        frame_ratio = frame_w / frame_h
-        canvas_ratio = canvas_w / canvas_h
-        if frame_ratio > canvas_ratio:
-            render_w = canvas_w
-            render_h = max(1, int(canvas_w / frame_ratio))
-        else:
-            render_h = canvas_h
-            render_w = max(1, int(canvas_h * frame_ratio))
-
-        offset_x = max(0, (canvas_w - render_w) // 2)
-        offset_y = max(0, (canvas_h - render_h) // 2)
-        return (render_w, render_h, offset_x, offset_y)
-
     @staticmethod
-    def _set_button_state(button: tk.Button, enabled: bool) -> None:
-        button.configure(state=(tk.NORMAL if enabled else tk.DISABLED))
-
-    def set_window_title(self, title: str) -> None:
-        self.root.title(title)
-
-    def set_video_label(self, video_path: str | None) -> None:
-        if video_path is None:
-            self.set_window_title(self.config.app.title)
-            return
-        self.set_window_title(f"{self.config.app.title} - {Path(video_path).name}")
+    def _set_button_state(button: QPushButton, enabled: bool) -> None:
+        button.setEnabled(enabled)
