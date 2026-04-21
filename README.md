@@ -1,12 +1,18 @@
-# UAV Person Tracker (Siamese-Based)
+# UAV Person Tracker
 
 ## Overview
 
-This project implements a **real-time UAV person-tracking system** using a **Siamese tracking architecture**.
+This project implements a **real-time UAV person-tracking system** for **CPU-only edge deployment** and a **desktop GUI application**.
 
-The target deployment is **CPU-only edge hardware**, so the design prioritizes low latency, lightweight models, and practical real-time performance.
+The main tracker direction is now **SiamAPN++ + MobileOne-S2**: a UAV-oriented APN head paired with a re-parameterizable MobileOne backbone.
 
 The system takes UAV video input, initializes a target in the first frame, and continuously tracks that person across subsequent frames.
+
+Current implementation status:
+
+- the repository is in transition before the primary tracker rewrite starts
+- the GUI and backend abstraction are already in place
+- the planned primary model implementation is documented before the code swap lands
 
 Current project scope:
 
@@ -20,6 +26,28 @@ Current project scope:
 - 720p input -> avoid full-frame processing
 - Single-object tracking -> template can be reused, but search still runs every frame
 - Limited memory/cache -> large models hurt real performance
+
+## Primary Tracker Plan
+
+The planned primary architecture is:
+
+- **SiamAPN++** tracking head
+- **MobileOne-S2** backbone
+- dual-level feature extraction from MobileOne intermediate stages
+- inference-time **re-parameterization** for fast deployment
+
+Why this direction:
+
+- literature-backed improvement over older anchor-based Siamese baselines on UAV tracking
+- better fit for small aerial targets than a plain lightweight cross-correlation head
+- still well inside the project's CPU and competition budget
+
+Implementation priorities:
+
+- swap the default SiamAPN++ AlexNet backbone for MobileOne-S2
+- adjust APN neck channels to match the new feature dimensions
+- keep ImageNet pretrained unfused MobileOne weights for training
+- fuse the MobileOne backbone once before inference
 
 ---
 
@@ -82,16 +110,19 @@ UAV Video
    ↓
 Frame Extractor
    ↓
-Siamese Tracker
-   ├── Template Branch (first frame target)
-   ├── Shared Feature Extractor
-   ├── Search Branch (current frame)
-   ├── Cross-Correlation
-   ├── Response Map
-   └── Bounding Box Head
+Tracker Backend
+   ├── Current app backend: OpenCV CSRT
+   └── Planned primary backend: SiamAPN++ + MobileOne-S2
+       ├── Template branch
+       ├── Search branch
+       ├── MobileOne-S2 dual-level features
+       ├── APN fusion / prediction head
+       └── Box scoring and selection
    ↓
-Post-Processing (smoothing + scale adaptation)
-   ↓
+Tracking State + Post-processing
+   ├── Tracking / Uncertain / Lost
+   ├── Confidence and smoothing
+   └── Overlay + event output
 Tracked Person Output
 ```
 
@@ -99,10 +130,10 @@ Tracked Person Output
 
 ## Features
 
-* Siamese-based visual tracking (training + inference pipeline)
-* Lightweight architecture targeting CPU-only edge hardware
+* Planned primary tracker: `SiamAPN++ + MobileOne-S2`
+* CPU-oriented design with MobileOne re-parameterization planned for deployment
 * **Desktop GUI** (`app/`) built with PySide6 — load video, select target, track in real time
-* OpenCV CSRT tracker as the V1 backend (swappable via config)
+* Current app backend: OpenCV CSRT, behind a swappable tracker interface during the transition
 * Threaded rendering — worker thread runs the tracker; Qt main thread renders at 30 fps without blocking
 * Frame downscaling before tracking (`track_max_width`) for speed without sacrificing display resolution
 * Explicit tracker states: Tracking, Uncertain, Lost
@@ -116,8 +147,11 @@ Tracked Person Output
 
 ## Documentation
 
-- [`docs/public_dataset_notes.md`](docs/public_dataset_notes.md) - Notes on the competition dataset, person-tracking alignment, and recommended supplementary public datasets.
+- [`docs/SiamAPN++ + MobileOne-S2 — Implementation Plan.md`](docs/SiamAPN++ + MobileOne-S2 — Implementation Plan.md) - Primary tracker implementation plan and architecture decisions.
+- [`docs/Phase 0 — CNN & Siamese Baselines.md`](docs/Phase 0 — CNN & Siamese Baselines.md) - Research-backed baseline comparison and rationale for the chosen direction.
+- [`docs/references/public_dataset_notes.md`](docs/references/public_dataset_notes.md) - Notes on the competition dataset, person-tracking alignment, and recommended supplementary public datasets.
 - [`docs/info-for-agents.md`](docs/info-for-agents.md) - Consolidated notes about dataset structure, rules, scoring, and constraints from the overlapping MTC-AIC4 context.
+- [`docs/references/models_comparisons.md`](docs/references/models_comparisons.md) - Older model comparison notes kept as reference material.
 
 ---
 
@@ -129,30 +163,25 @@ uav-person-tracker/
 ├── config.yaml                 # Combined config (model, train, inference)
 ├── requirements.txt            # pip dependencies
 │
+├── app/                        # Desktop GUI application
+│   ├── main.py                 # PySide6 entry point
+│   └── app_config.yaml         # GUI and tracker backend settings
+│
 ├── train/                      # Training package
 │   ├── __init__.py
 │   ├── metrics.py              # IoU, prediction selection, batch metrics
-│   └── run.py                  # SiameseTrainer + training loop entry point
+│   └── run.py                  # Training loop entry point
 │
-├── inference/                  # Inference package
-│   ├── load_model.py           # Load checkpoint → SiameseTracker
-│   ├── predictor.py            # numpy image pair → PredictionResult
-│   ├── tracker.py              # Stateful frame-by-frame tracker
-│   ├── video_runner.py         # Full video pipeline with interactive ROI
-│   └── visualize.py            # Bounding box + trail overlay drawing
-│
-├── models/                     # Model architecture
-│   ├── backbone/
-│   │   └── mobilenetv3.py      # MobileNetV3-Small feature extractor
-│   ├── siamese.py              # DepthwiseCrossCorrelation + SiameseHead + SiameseTracker
-│   └── losses.py               # SiameseLoss + build_targets
+├── models/                     # Tracker and backbone implementations
+│   ├── backbone/               # Backbone modules
+│   └── ...                     # Tracker-specific model code
 │
 ├── data/                       # Data pipeline
 │   ├── dataset.py              # UAV123SiameseDataset
 │   ├── preprocess.py           # Raw UAV123 → manifest/cache/splits
 │   └── input/                  # Sample input videos
 │
-├── evaluation/                 # Evaluation (placeholder)
+├── evaluation/                 # Evaluation utilities
 ├── tests/                      # Test suite
 ├── docs/                       # Documentation
 └── notebooks/                  # Jupyter notebooks
@@ -198,7 +227,7 @@ If you prefer pip or already have dependencies installed globally:
 pip install -r requirements.txt
 python data/preprocess.py --dataset-root <path-to-dataset> --output-dir data/processed
 python train/run.py --config config.yaml
-python inference/video_runner.py --checkpoint checkpoints/best.pth --video <path-to-video>
+python -m app.main
 ```
 
 ---
@@ -229,16 +258,6 @@ Options:
 
 * `--config <path>` — path to YAML config (default: `config.yaml`)
 * `--resume <path>` — resume from a checkpoint (e.g. `checkpoints/epoch_005.pth`)
-
-### Run Inference (Tracking)
-
-```bash
-# Using uv
-uv run infer --checkpoint checkpoints/best.pth --video <path-to-video>
-
-# Using python directly
-python inference/video_runner.py --checkpoint checkpoints/best.pth --video <path-to-video>
-```
 
 ### Run the Desktop GUI
 
