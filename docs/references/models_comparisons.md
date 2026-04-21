@@ -264,7 +264,59 @@ These are still useful references, but they answer slightly different questions.
 
 ---
 
-## 6. YOLO as a Detector + Tracker Alternative
+## 6. Occlusion, Long-Term Loss, and Local Tracking Limits
+
+Plain Siamese trackers are usually strong **short-term local trackers**, but they are not automatically good **long-term recovery systems**.
+
+They work well when:
+
+- the target stays near the previous location
+- appearance changes are moderate
+- occlusion is short
+- the local search crop still contains the target
+
+They become weak when:
+
+- the target is fully occluded for a while
+- the target leaves the local search area
+- a similar-looking distractor appears nearby
+- the tracker updates itself during uncertain frames and drifts
+
+This is the key limitation:
+
+**plain Siamese tracking is usually a local matching system, not a global recovery system.**
+
+### Why this matters in practice
+
+During occlusion, the response map can become ambiguous. If the tracker keeps updating the template in that state, it may lock onto the wrong object or background patch. A stronger backbone alone does not fix this failure mode.
+
+The biggest gains usually come from system behavior around the tracker:
+
+- confidence estimation
+- template update control
+- search expansion
+- memory bank
+- re-detection module
+- tracking state machine
+
+### Relation to classic OpenCV-style trackers
+
+At a high level, plain Siamese trackers behave similarly to short-term trackers such as **KCF** and **CSRT**:
+
+- they start from an initial box
+- they search in a local region around the last target location
+- they assume mostly smooth motion
+- they can fail when the target disappears or jumps far away
+
+The main difference is that Siamese trackers use learned visual matching, so they are usually stronger than classic handcrafted trackers in normal short-term conditions. But both families need extra recovery logic for real long-term robustness.
+
+### Design takeaway
+
+If the target is strict CPU-only local tracking, a Siamese tracker remains a strong primary design. If long occlusion, disappearance, and re-entry matter more, the system needs recovery logic around that tracker or a detector-assisted fallback.
+
+---
+
+## 7. YOLO as a Detector + Tracker Alternative
 
 YOLO can work well for real-time video on CPU, but for tracking it is usually a **detector + tracker** pipeline rather than a pure tracker.
 
@@ -291,7 +343,7 @@ For this tracker, YOLO is a better **secondary system direction** than a primary
 
 ---
 
-## 7. Final Recommendations
+## 8. Final Recommendations
 
 ### If the target is strict CPU-only single-object tracking
 

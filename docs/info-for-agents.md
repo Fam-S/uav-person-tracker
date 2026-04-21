@@ -1,10 +1,5 @@
 # Info For Agents
 
-## Source Priority
-- Treat the Kaggle overview and the markdown files in this directory as the authoritative source when they conflict with the PDF.
-- Organizer clarification in `discussions.md` says the PDF was preliminary and the Kaggle page reflects the latest specifications.
-- Use the PDF mainly for background context and likely source-dataset clues, not for final scoring or constraint values.
-
 The dataset merges multiple established aerial tracking benchmarks with fresh custom-annotated UAV footage. Every sequence contains a single target observed from realistic UAV trajectories that include translation, rotation, and altitude variations.
 
 ## Competition Task
@@ -46,7 +41,6 @@ x,y,w,h
 
 `(x, y)` is the top-left corner; `w` and `h` are width and height in pixels. Frames where the target disappears use `0,0,0,0`.
 
-> **Update**: Organizers have re-uploaded the dataset so that every test sequence now ships with the initial bounding box metadata. Re-download the Google Drive package if you grabbed it before this fix.
 
 ## Metadata Files
 Two helper files are distributed alongside the sequences.
@@ -129,8 +123,7 @@ MTC-AIC4-data/
 | `dataset1` | 20 | Unclear | Does not cleanly match the PDF counts for the four named public datasets; may be the custom-annotated UAV footage mentioned in the docs or another organizer-curated subset. |
 
 - This mapping is an inference from the PDF plus the extracted archive, not an explicit organizer-provided mapping.
-- One notable mismatch remains: the PDF lists `UAV123` with 123 sequences, while the extracted `dataset5` appears to contain 122.
-- The PDF states that the competition uses several publicly available aerial SOT datasets, while the local docs also mention fresh custom-annotated UAV footage. That combination makes it plausible that one package group is organizer-created or organizer-curated rather than directly named in the PDF.
+- the competition uses several publicly available aerial SOT datasets, while the local docs also mention fresh custom-annotated UAV footage. That combination makes it plausible that one package group is organizer-created or organizer-curated rather than directly named in the PDF.
 
 ## Evaluation And Scoring
 
@@ -150,7 +143,6 @@ AccuracyScore = 0.6 * AUC + 0.4 * NormPrecision
 - Inference latency
 - Model size
 
-Organizer weights in `evaluation.md`:
 - FLOPs: `0.25`
 - Params: `0.15`
 - Latency: `0.35`

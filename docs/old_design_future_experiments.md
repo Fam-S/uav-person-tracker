@@ -1,6 +1,63 @@
-## Future Experiments
+## Old Design Future Experiments and Improvements
 
 This note captures a future direction for handling **long-term tracking** and **occlusions** under **CPU-only** constraints.
+
+It refers to the previous Siamese tracker design and should be treated as old-design planning notes while the primary architecture is being changed.
+
+---
+
+## Base Tracker Structure
+
+Before discussing improvements, it helps to anchor the discussion in the base lightweight Siamese tracker structure.
+
+### Main components
+
+1. **Template branch**
+   - Takes the target crop from the first frame
+   - Encodes what the object looks like
+
+2. **Search branch**
+   - Takes the search region from the current frame
+   - Looks for the target near the previous location
+
+3. **Shared lightweight backbone**
+   - Extracts features for both branches using the same network
+   - The exact backbone can change over time; the key idea is lightweight shared feature extraction
+
+4. **Lightweight fusion or feature enhancement**
+   - Refines or fuses features before matching when needed
+   - Helps keep the tracker efficient while improving feature quality
+
+5. **Matching module**
+   - Usually some form of cross-correlation
+   - Compares template features with search features
+
+6. **Prediction head**
+   - Outputs a classification score for target location
+   - Outputs bounding box regression for target size and position
+
+7. **Tracking logic and post-processing**
+   - Selects the best response
+   - Applies smoothing, scale update, and crop update for the next frame
+
+### Simple flow
+
+Template crop + search crop
+-> shared lightweight feature extractor
+-> feature fusion / correlation
+-> score map + box prediction
+-> updated target location
+
+### In short
+
+A lightweight Siamese tracker is basically:
+
+- two inputs: template + search
+- one shared lightweight backbone
+- one lightweight matching stage
+- one small prediction head
+
+That is why this family is attractive for **CPU-only edge tracking**.
 
 ---
 
@@ -32,7 +89,122 @@ This is more suitable for long-term tracking than only increasing backbone size.
 
 ---
 
-## Proposed Architecture
+## Improvement Roadmap
+
+The best path is usually:
+
+1. start with a clean lightweight Siamese baseline
+2. strengthen it with low-cost robustness improvements
+3. only then test broader long-term recovery extensions or alternative tracker families
+
+---
+
+## Immediate Improvements for the Primary Tracker
+
+Before testing broader architecture changes, the highest-value path is to strengthen the current Siamese tracker with low-cost system improvements.
+
+### Recommended improvements
+
+#### 1. Confidence-gated template updates
+
+- Update the template only when tracking confidence is high
+- Freeze updates when confidence drops
+- Helps prevent drift during occlusion or ambiguous frames
+
+Why it matters:
+
+- one of the cheapest and most effective improvements
+- avoids corrupting the target representation
+
+#### 2. Template memory bank
+
+- Keep more than one template instead of only one
+- Store:
+  - the initial template
+  - a few recent high-confidence templates
+
+Why it matters:
+
+- improves robustness to appearance change
+- gives the tracker multiple reliable target views
+
+#### 3. Three-state tracking logic
+
+Use a simple state machine:
+
+- **tracking**
+- **uncertain**
+- **lost**
+
+Why it matters:
+
+- allows different behavior depending on confidence
+- prevents bad updates when the tracker is unreliable
+- creates a clean path for recovery behavior
+
+#### 4. Adaptive search region
+
+- Use a small crop when confidence is high
+- Expand the crop when confidence becomes weak
+
+Why it matters:
+
+- improves recovery chances
+- keeps normal tracking fast on CPU
+- avoids full-frame search in most frames
+
+#### 5. Motion prior
+
+- Use a lightweight motion model such as:
+  - Kalman filter
+  - constant-velocity prediction
+
+Why it matters:
+
+- helps place the next search crop more intelligently
+- improves stability when the response map is weak
+
+#### 6. Train for failure cases
+
+Add training data or augmentation for:
+
+- occlusion
+- motion blur
+- scale changes
+- similar-person distractors
+- partial out-of-frame views
+
+Why it matters:
+
+- improves robustness without changing inference architecture
+- especially useful for UAV scenes with clutter and rapid motion
+
+### Best improvement order
+
+If improvements are added gradually, the best order is:
+
+1. **Confidence-gated updates**
+2. **Template memory bank**
+3. **Three-state tracking logic**
+4. **Adaptive search region**
+5. **Motion prior**
+6. **Failure-case training improvements**
+
+### Best next step
+
+The best immediate upgrade is:
+
+**confidence-gated updates + a small template memory bank**
+
+Why:
+
+- large robustness gain
+- low CPU cost
+- keeps the primary architecture simple and fast
+
+---
+
+## Long-Term Recovery Architecture
 
 ### 1. Short-term local tracker
 
@@ -153,7 +325,7 @@ To stay practical on CPU:
 
 ---
 
-## Recommended Future Experiment
+## Alternative Experiments
 
 ### Primary future direction
 

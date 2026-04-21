@@ -1,0 +1,26 @@
+app:
+  title: UAV Person Tracker
+  width: 1280
+  height: 800
+  min_width: 1024
+  min_height: 640
+
+video:
+  target_fps: 30
+  keep_aspect_ratio: true
+
+tracking:
+  backend: traditional_tracker
+  checkpoint: null
+  uncertain_confidence_threshold: 0.55
+  lost_confidence_threshold: 0.35
+  trail_length: 20
+  search_radius_scale: 2.0
+  selection_aspect_ratio: 0.5
+  default_selection_height_fraction: 0.2
+  template_crop_scale: 1.0
+  search_crop_scale: 2.0
+
+overlay:
+  show_confidence: true
+  show_trail: true
