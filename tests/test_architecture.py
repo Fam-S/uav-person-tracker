@@ -1,130 +1,42 @@
-"""Architecture shape tests — run with: uv run pytest tests/test_architecture.py -v"""
 from __future__ import annotations
 
-import pytest
 import torch
 
-from models.backbone import MobileNetV3Backbone
-from models.siamese import SiameseTracker, DepthwiseCrossCorrelation, SiameseHead
-from models.losses import SiameseLoss, build_targets
+from models import SiamAPNppMobileOne
+from models.backbone import MobileOneS2Backbone
+from models.losses import SiamAPNLoss
 
 
 DEVICE = torch.device("cpu")
-B = 2  # batch size used in all tests
+BATCH = 2
 
 
-class TestBackbone:
-    def test_output_shape_template(self):
-        backbone = MobileNetV3Backbone(variant="small", pretrained=False).to(DEVICE)
-        x = torch.rand(B, 3, 127, 127)
-        out = backbone(x)
-        assert out.shape == (B, 96, 4, 4)
-
-    def test_output_shape_search(self):
-        backbone = MobileNetV3Backbone(variant="small", pretrained=False).to(DEVICE)
-        x = torch.rand(B, 3, 255, 255)
-        out = backbone(x)
-        assert out.shape == (B, 96, 8, 8)
-
-    def test_frozen_by_default(self):
-        backbone = MobileNetV3Backbone(variant="small", pretrained=False, trainable=False)
-        for param in backbone.features.parameters():
-            assert not param.requires_grad
-
-    def test_projection_trainable(self):
-        backbone = MobileNetV3Backbone(variant="small", pretrained=False)
-        for param in backbone.projection.parameters():
-            assert param.requires_grad
+def test_mobileone_backbone_outputs_two_feature_levels():
+    backbone = MobileOneS2Backbone(pretrained_path=None, normalize_input=True).to(DEVICE)
+    x = torch.rand(BATCH, 3, 255, 255, device=DEVICE)
+    low_level, high_level = backbone(x)
+    assert low_level.shape == (BATCH, 256, 32, 32)
+    assert high_level.shape == (BATCH, 512, 16, 16)
 
 
-class TestCorrelation:
-    def test_output_shape(self):
-        corr = DepthwiseCrossCorrelation()
-        z = torch.rand(B, 96, 4, 4)
-        x = torch.rand(B, 96, 8, 8)
-        out = corr(z, x)
-        assert out.shape == (B, 96, 5, 5)
-
-    def test_batch_size_mismatch_raises(self):
-        corr = DepthwiseCrossCorrelation()
-        z = torch.rand(1, 96, 4, 4)
-        x = torch.rand(2, 96, 8, 8)
-        with pytest.raises(ValueError, match="Batch size mismatch"):
-            corr(z, x)
+def test_siamapn_forward_shapes():
+    model = SiamAPNppMobileOne(feature_channels=96, pretrained_path=None).to(DEVICE)
+    template = torch.rand(BATCH, 3, 127, 127, device=DEVICE)
+    search = torch.rand(BATCH, 3, 255, 255, device=DEVICE)
+    outputs = model(template, search)
+    assert outputs["bbox_pred"].shape == (BATCH, 4)
 
 
-class TestHead:
-    def test_output_shapes(self):
-        head = SiameseHead(in_channels=96)
-        x = torch.rand(B, 96, 5, 5)
-        out = head(x)
-        assert out["cls_logits"].shape == (B, 1, 5, 5)
-        assert out["bbox_pred"].shape == (B, 4, 5, 5)
-
-
-class TestSiameseTracker:
-    @pytest.fixture
-    def model(self):
-        return SiameseTracker(
-            backbone_variant="small",
-            pretrained_backbone=False,
-            feature_channels=96,
-            freeze_backbone=True,
-        ).to(DEVICE)
-
-    def test_forward_output_keys(self, model):
-        template = torch.rand(B, 3, 127, 127)
-        search = torch.rand(B, 3, 255, 255)
-        out = model(template, search)
-        assert set(out.keys()) == {"template_features", "search_features", "response_map", "cls_logits", "bbox_pred"}
-
-    def test_cls_logits_shape(self, model):
-        template = torch.rand(B, 3, 127, 127)
-        search = torch.rand(B, 3, 255, 255)
-        out = model(template, search)
-        assert out["cls_logits"].shape == (B, 1, 5, 5)
-
-    def test_bbox_pred_shape(self, model):
-        template = torch.rand(B, 3, 127, 127)
-        search = torch.rand(B, 3, 255, 255)
-        out = model(template, search)
-        assert out["bbox_pred"].shape == (B, 4, 5, 5)
-
-    def test_batch_mismatch_raises(self, model):
-        template = torch.rand(1, 3, 127, 127)
-        search = torch.rand(2, 3, 255, 255)
-        with pytest.raises(ValueError, match="Batch size mismatch"):
-            model(template, search)
-
-
-class TestLoss:
-    @pytest.fixture
-    def model_outputs(self):
-        model = SiameseTracker(backbone_variant="small", pretrained_backbone=False)
-        template = torch.rand(B, 3, 127, 127)
-        search = torch.rand(B, 3, 255, 255)
-        with torch.no_grad():
-            return model(template, search)
-
-    def test_loss_is_scalar(self, model_outputs):
-        criterion = SiameseLoss(search_size=255)
-        search_bbox = torch.tensor([[50.0, 60.0, 80.0, 100.0], [70.0, 80.0, 60.0, 90.0]])
-        loss_out = criterion(
-            cls_logits=model_outputs["cls_logits"],
-            bbox_pred=model_outputs["bbox_pred"],
-            search_bbox=search_bbox,
-        )
-        assert loss_out.total_loss.shape == ()
-        assert loss_out.total_loss.item() > 0
-
-    def test_loss_components_finite(self, model_outputs):
-        criterion = SiameseLoss(search_size=255)
-        search_bbox = torch.tensor([[50.0, 60.0, 80.0, 100.0], [70.0, 80.0, 60.0, 90.0]])
-        loss_out = criterion(
-            cls_logits=model_outputs["cls_logits"],
-            bbox_pred=model_outputs["bbox_pred"],
-            search_bbox=search_bbox,
-        )
-        assert torch.isfinite(loss_out.total_loss)
-        assert torch.isfinite(loss_out.cls_loss)
-        assert torch.isfinite(loss_out.reg_loss)
+def test_loss_stays_finite():
+    model = SiamAPNppMobileOne(feature_channels=96, pretrained_path=None).to(DEVICE)
+    criterion = SiamAPNLoss(search_size=255).to(DEVICE)
+    template = torch.rand(BATCH, 3, 127, 127, device=DEVICE)
+    search = torch.rand(BATCH, 3, 255, 255, device=DEVICE)
+    search_bbox = torch.tensor(
+        [[60.0, 70.0, 50.0, 80.0], [40.0, 30.0, 70.0, 90.0]],
+        device=DEVICE,
+    )
+    outputs = model(template, search)
+    loss_out = criterion(bbox_pred=outputs["bbox_pred"], search_bbox=search_bbox)
+    assert torch.isfinite(loss_out.total_loss)
+    assert torch.isfinite(loss_out.reg_loss)

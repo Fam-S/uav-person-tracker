@@ -6,9 +6,10 @@ import yaml
 
 @dataclass(slots=True)
 class ModelSettings:
-    backbone: str = "small"
-    feature_channels: int = 96
-    pretrained: bool = True
+    backbone: str = "mobileone_s2"
+    feature_channels: int = 192
+    pretrained: bool = False
+    pretrained_path: str | None = None
     normalize_input: bool = True
     template_size: int = 127
     search_size: int = 255
@@ -17,25 +18,17 @@ class ModelSettings:
 
 @dataclass(slots=True)
 class TrainSettings:
-    dataset_root: str = "data/raw/UAV123"
-    processed_root: str = "data/processed"
+    dataset_root: str = "data/raw/MTC-AIC4-data"
     batch_size: int = 8
     epochs: int = 10
     learning_rate: float = 0.0001
-    backbone_learning_rate: float = 0.00001
     weight_decay: float = 0.0001
-    freeze_backbone: bool = False
-    unfreeze_last_n_backbone_blocks: int = 0
     device: str = "cuda"
     checkpoint_dir: str = "checkpoints"
-    log_dir: str = "logs"
-    cls_weight: float = 1.0
-    reg_weight: float = 5.0
     smooth_l1_beta: float = 1.0
     num_workers: int = 2
     pin_memory: bool = True
     train_samples_per_epoch: int = 512
-    val_samples_per_epoch: int = 128
 
 
 @dataclass(slots=True)
@@ -124,12 +117,8 @@ def load_config(config_path=None):
         raise ValueError("train.epochs must be positive")
     if train.learning_rate <= 0:
         raise ValueError("train.learning_rate must be positive")
-    if train.backbone_learning_rate <= 0:
-        raise ValueError("train.backbone_learning_rate must be positive")
     if train.weight_decay < 0:
         raise ValueError("train.weight_decay cannot be negative")
-    if train.unfreeze_last_n_backbone_blocks < 0:
-        raise ValueError("train.unfreeze_last_n_backbone_blocks cannot be negative")
     if infer.confidence_threshold < 0 or infer.confidence_threshold > 1:
         raise ValueError("infer.confidence_threshold must be between 0 and 1")
     validate_tracking_settings(tracking)
