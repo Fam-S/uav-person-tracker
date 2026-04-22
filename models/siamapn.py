@@ -53,8 +53,8 @@ class SiamAPNppMobileOne(nn.Module):
             pretrained_path=pretrained_path,
             normalize_input=normalize_input,
         )
-        self.low_align = FeatureAlign(256, feature_channels)
-        self.high_align = FeatureAlign(512, feature_channels)
+        self.low_align = FeatureAlign(self.backbone.low_channels, feature_channels)
+        self.high_align = FeatureAlign(self.backbone.high_channels, feature_channels)
         self.correlation = DepthwiseCrossCorrelation()
         self.fusion = nn.Sequential(
             nn.Conv2d(feature_channels * 2, feature_channels, kernel_size=1, bias=False),

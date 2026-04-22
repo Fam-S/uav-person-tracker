@@ -18,9 +18,9 @@ class ModelSettings:
 
 @dataclass(slots=True)
 class TrainSettings:
-    dataset_root: str = "data/raw/MTC-AIC4-data"
+    dataset_root: str = "data/raw"
     batch_size: int = 8
-    epochs: int = 10
+    epochs: int = 20
     learning_rate: float = 0.0001
     weight_decay: float = 0.0001
     device: str = "cuda"
@@ -28,7 +28,9 @@ class TrainSettings:
     smooth_l1_beta: float = 1.0
     num_workers: int = 2
     pin_memory: bool = True
-    train_samples_per_epoch: int = 512
+    train_samples_per_epoch: int = 2048
+    translation_jitter: float = 0.15
+    scale_jitter: float = 0.1
 
 
 @dataclass(slots=True)
@@ -93,7 +95,33 @@ def _read_section(data, section):
     return value
 
 
-def load_config(config_path=None):
+def _apply_overrides(raw: dict, overrides: dict[str, str]) -> None:
+    for key, value in overrides.items():
+        parts = key.split(".")
+        section_name = parts[0]
+        field_name = ".".join(parts[1:])
+        if section_name not in raw:
+            raw[section_name] = {}
+        raw[section_name][field_name] = _parse_value(value)
+
+
+def _parse_value(value: str):
+    if value.lower() == "true":
+        return True
+    if value.lower() == "false":
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
+
+
+def load_config(config_path=None, overrides: dict[str, str] | None = None):
     path = Path(config_path) if config_path else Path(__file__).with_name("config.yaml")
     if not path.exists():
         raise FileNotFoundError(f"Project config not found: {path}")
@@ -103,6 +131,9 @@ def load_config(config_path=None):
 
     if not isinstance(raw, dict):
         raise ValueError("Top-level project config must be a mapping")
+
+    if overrides:
+        _apply_overrides(raw, overrides)
 
     model = ModelSettings(**_read_section(raw, "model"))
     train = TrainSettings(**_read_section(raw, "train"))

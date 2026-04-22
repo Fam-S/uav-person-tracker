@@ -44,6 +44,7 @@ class SiameseTrainer:
         )
         self.checkpoint_dir = Path(config.train.checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.best_loss = float("inf")
 
     def build_dataloader(self) -> DataLoader:
         dataset = CompetitionSiameseDataset(
@@ -52,6 +53,8 @@ class SiameseTrainer:
             search_size=self.config.model.search_size,
             context_amount=self.config.model.context_amount,
             samples_per_epoch=self.config.train.train_samples_per_epoch,
+            translation_jitter=self.config.train.translation_jitter,
+            scale_jitter=self.config.train.scale_jitter,
             seed=0,
         )
         return DataLoader(
@@ -95,7 +98,7 @@ class SiameseTrainer:
             num_batches=num_batches,
         )
 
-    def save_checkpoint(self, epoch: int, stats: EpochStats) -> Path:
+    def save_checkpoint(self, epoch: int, stats: EpochStats, is_best: bool = False) -> Path:
         checkpoint_path = self.checkpoint_dir / f"epoch_{epoch:03d}.pth"
         torch.save(
             {
@@ -107,6 +110,18 @@ class SiameseTrainer:
             },
             checkpoint_path,
         )
+        if is_best:
+            best_path = self.checkpoint_dir / "best.pth"
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": self.model.state_dict(),
+                    "optimizer_state_dict": self.optimizer.state_dict(),
+                    "stats": asdict(stats),
+                    "config_path": str(self.config.config_path),
+                },
+                best_path,
+            )
         return checkpoint_path
 
 
@@ -115,14 +130,19 @@ def run_training(config: ProjectConfig) -> list[EpochStats]:
     dataloader = trainer.build_dataloader()
     history: list[EpochStats] = []
 
+    print(f"device={trainer.device} batches_per_epoch={len(dataloader)}")
     for epoch in range(1, config.train.epochs + 1):
         stats = trainer.train_epoch(dataloader, epoch)
-        trainer.save_checkpoint(epoch, stats)
+        is_best = stats.mean_total_loss < trainer.best_loss
+        if is_best:
+            trainer.best_loss = stats.mean_total_loss
+        trainer.save_checkpoint(epoch, stats, is_best=is_best)
         history.append(stats)
+        tag = " *" if is_best else ""
         print(
             f"epoch={stats.epoch} batches={stats.num_batches} "
             f"loss={stats.mean_total_loss:.4f} "
-            f"reg={stats.mean_reg_loss:.4f}"
+            f"reg={stats.mean_reg_loss:.4f}{tag}"
         )
 
     return history
@@ -131,9 +151,18 @@ def run_training(config: ProjectConfig) -> list[EpochStats]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train the minimal SiamAPN++ + MobileOne-S2 model.")
     parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
+                        help="Override config value, e.g. --override train.dataset_root=/kaggle/input/data")
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    overrides = {}
+    for item in args.override:
+        key, _, value = item.partition("=")
+        if not key or not value:
+            parser.error(f"Invalid --override format: '{item}'. Use KEY=VALUE.")
+        overrides[key] = value
+
+    config = load_config(args.config, overrides=overrides or None)
     run_training(config)
 
 

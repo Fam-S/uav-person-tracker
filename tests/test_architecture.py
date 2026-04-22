@@ -16,7 +16,7 @@ def test_mobileone_backbone_outputs_two_feature_levels():
     x = torch.rand(BATCH, 3, 255, 255, device=DEVICE)
     low_level, high_level = backbone(x)
     assert low_level.shape == (BATCH, 256, 32, 32)
-    assert high_level.shape == (BATCH, 512, 16, 16)
+    assert high_level.shape == (BATCH, 640, 16, 16)
 
 
 def test_siamapn_forward_shapes():

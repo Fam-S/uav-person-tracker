@@ -1,17 +1,17 @@
 model:
   backbone: mobileone_s2
   feature_channels: 192
-  pretrained: false
-  pretrained_path: null
+  pretrained: true
+  pretrained_path: checkpoints/mobileone_s2_unfused.pth.tar
   normalize_input: true
   template_size: 127
   search_size: 255
   context_amount: 0.5
 
 train:
-  dataset_root: data/raw/MTC-AIC4-data
+  dataset_root: data/raw
   batch_size: 8
-  epochs: 10
+  epochs: 20
   learning_rate: 0.0001
   weight_decay: 0.0001
   device: cuda
@@ -21,7 +21,9 @@ train:
   num_workers: 2
   pin_memory: true
 
-  train_samples_per_epoch: 512
+  train_samples_per_epoch: 2048
+  translation_jitter: 0.15
+  scale_jitter: 0.1
 
 infer:
   checkpoint: checkpoints/best.pth
@@ -35,8 +37,8 @@ infer:
   debug: true
 
 tracking:
-  backend: csrt
-  checkpoint: null
+  backend: siamapn
+  checkpoint: checkpoints/best.pth
   uncertain_confidence_threshold: 0.55
   lost_confidence_threshold: 0.35
   trail_length: 20

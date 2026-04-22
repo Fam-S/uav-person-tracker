@@ -145,6 +145,8 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         context_amount: float = 0.5,
         samples_per_epoch: int = 512,
         frame_range: int = 100,
+        translation_jitter: float = 0.0,
+        scale_jitter: float = 0.0,
         seed: int = 0,
     ) -> None:
         super().__init__()
@@ -154,6 +156,8 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         self.context_amount = float(context_amount)
         self.samples_per_epoch = int(samples_per_epoch)
         self.frame_range = int(frame_range)
+        self.translation_jitter = float(translation_jitter)
+        self.scale_jitter = float(scale_jitter)
         self.seed = int(seed)
 
         sequences = load_sequences(self.raw_root, "train")
@@ -211,6 +215,12 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         search_frame = _load_frame(sequence.video_path, search_index)
 
         search_center = _xywh_to_center(search_box)[:2]
+
+        scale_factor = 1.0
+        if self.scale_jitter > 0:
+            scale_factor = 1.0 + rng.uniform(-self.scale_jitter, self.scale_jitter)
+            scale_factor = max(0.5, scale_factor)
+
         template_patch = _crop_and_resize(
             template_frame,
             template_box,
@@ -218,21 +228,31 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
             context_amount=self.context_amount,
             area_scale=1.0,
         )
+
+        tx_jitter, ty_jitter = 0.0, 0.0
+        if self.translation_jitter > 0:
+            tx_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
+            ty_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
+        jittered_center = (
+            search_center[0] + tx_jitter * search_box[2],
+            search_center[1] + ty_jitter * search_box[3],
+        )
+
         search_patch = _crop_and_resize(
             search_frame,
             template_box,
             out_size=self.search_size,
             context_amount=self.context_amount,
-            center_override=search_center,
-            area_scale=2.0,
+            center_override=jittered_center,
+            area_scale=2.0 * scale_factor,
         )
         search_bbox_xywh = _project_box_to_crop(
             search_box_xywh=search_box,
             reference_box_xywh=template_box,
             out_size=self.search_size,
             context_amount=self.context_amount,
-            center_override=search_center,
-            area_scale=2.0,
+            center_override=jittered_center,
+            area_scale=2.0 * scale_factor,
         )
 
         return {
