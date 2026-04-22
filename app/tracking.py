@@ -7,7 +7,7 @@ from typing import Protocol
 import cv2
 import numpy as np
 
-from app.config import TrackingSettings
+from config import TrackingSettings
 
 
 BBox = tuple[int, int, int, int]

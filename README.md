@@ -138,7 +138,7 @@ Tracked Person Output
 * Frame downscaling before tracking (`track_max_width`) for speed without sacrificing display resolution
 * Explicit tracker states: Tracking, Uncertain, Lost
 * Bounding box overlay, confidence label, and trajectory trail
-* Config-driven system (`config.yaml` for model/train/infer, `app/app_config.yaml` for the GUI)
+* Config-driven system (`config.yaml` for shared project settings, `app/app_config.yaml` for the GUI)
 * Modular codebase with a stable `TrackerBackend` interface for easy model swapping
 * Training pipeline with per-epoch checkpointing
 * Inference pipeline with interactive ROI selection and visualization
@@ -272,14 +272,18 @@ Flow: Open Video → click target center → drag to resize → Start → Pause 
 
 ## Configuration
 
-All settings live in a single [`config.yaml`](config.yaml) for model/training/inference, and [`app/app_config.yaml`](app/app_config.yaml) for the GUI:
+Settings are split by ownership:
+
+- [`config.yaml`](config.yaml) for shared project settings
+- [`app/app_config.yaml`](app/app_config.yaml) for GUI-only settings
 
 | Config file | Section | Key Settings |
 |-------------|---------|-------------|
 | `config.yaml` | `model` | backbone variant, feature channels, template/search size, pretrained flag |
 | `config.yaml` | `train` | dataset paths, batch size, learning rate, epochs, loss weights, backbone freeze |
 | `config.yaml` | `infer` | checkpoint path, video path, confidence threshold, device |
-| `app/app_config.yaml` | `tracking` | backend, `track_max_width`, thresholds, trail length |
+| `config.yaml` | `tracking` | backend, `track_max_width`, thresholds, trail length |
+| `app/app_config.yaml` | `tracking` | app override layer for the GUI-specific tracker behavior |
 | `app/app_config.yaml` | `video` | `target_fps` |
 | `app/app_config.yaml` | `overlay` | show confidence, show trail |
 

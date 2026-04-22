@@ -13,11 +13,11 @@ The app has been implemented as a small `PySide6`-based package inside `app/`.
 Current files:
 
 - `main.py` - app entry point
-- `config.py` - config loading and validation
+- `config.py` - app config loading and validation, composed with the root project config
 - `controller.py` - app workflow, worker thread, render loop, and state handling
 - `ui.py` - `PySide6` window, video surface, controls, and status display
 - `tracking.py` - backend interface, backend factory, and local backends
-- `app_config.yaml` - app-level settings
+- `app_config.yaml` - app-only settings
 
 ## V1 Direction
 
@@ -128,22 +128,29 @@ Current states include:
 
 Version 1 reads settings from:
 
-- `app/app_config.yaml`
+- `config.yaml` for shared project settings like tracker backend and crop sizes
+- `app/app_config.yaml` for app-only settings and tracker overrides
 
 Main settings include:
 
 - window size
 - target FPS
+- overlay toggles
+
+App tracking overrides include:
+
 - backend name
 - optional checkpoint path
 - uncertainty and lost thresholds
 - trail length
+- search radius scale
 - selection aspect ratio
-- default selection size
+- default selection height fraction
 - template crop scale
 - search crop scale
-- `track_max_width` — frames are downscaled to at most this width before being sent to the tracker (default: 640). Lower values are faster; results are scaled back to original coordinates before display.
-- overlay toggles
+- `track_max_width`
+
+Shared project settings include the root defaults for the same tracking fields above.
 
 The YAML intentionally keeps only the settings that are useful to change quickly.
 
@@ -176,7 +183,7 @@ This keeps the UI stable even if the underlying tracker changes later.
 
 ## Current Backend Options
 
-The current V1 implementation includes two backend options selected from `app_config.yaml`:
+The current V1 implementation includes two backend options selected from `config.yaml`:
 
 - `mock`
 

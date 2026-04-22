@@ -9,6 +9,7 @@ video:
   target_fps: 30
   keep_aspect_ratio: true
 
+# These values override the shared tracking defaults from `config.yaml` for the GUI.
 tracking:
   backend: csrt
   checkpoint: null
@@ -20,7 +21,7 @@ tracking:
   default_selection_height_fraction: 0.2
   template_crop_scale: 1.0
   search_crop_scale: 2.0
-  track_max_width: 640
+  track_max_width: 384
 
 overlay:
   show_confidence: true

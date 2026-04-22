@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import yaml
+
+from config import TrackingSettings, load_config as load_project_config, validate_tracking_settings
 
 
 @dataclass(slots=True)
@@ -23,21 +25,6 @@ class VideoSettings:
 
 
 @dataclass(slots=True)
-class TrackingSettings:
-    backend: str = "csrt"
-    checkpoint: str | None = None
-    uncertain_confidence_threshold: float = 0.55
-    lost_confidence_threshold: float = 0.35
-    trail_length: int = 20
-    search_radius_scale: float = 2.0
-    selection_aspect_ratio: float = 0.5
-    default_selection_height_fraction: float = 0.2
-    template_crop_scale: float = 1.0
-    search_crop_scale: float = 2.0
-    track_max_width: int = 640
-
-
-@dataclass(slots=True)
 class OverlaySettings:
     show_confidence: bool = True
     show_trail: bool = True
@@ -49,10 +36,11 @@ class AppConfig:
     video: VideoSettings
     tracking: TrackingSettings
     overlay: OverlaySettings
-    config_path: Path
+    app_config_path: Path
+    project_config_path: Path
 
 
-def _read_section(data: dict[str, Any], section: str) -> dict[str, Any]:
+def _read_section(data, section):
     value = data.get(section, {})
     if value is None:
         return {}
@@ -61,43 +49,37 @@ def _read_section(data: dict[str, Any], section: str) -> dict[str, Any]:
     return value
 
 
-def load_config(config_path: str | Path | None = None) -> AppConfig:
-    path = Path(config_path) if config_path else Path(__file__).with_name("app_config.yaml")
-    if not path.exists():
-        raise FileNotFoundError(f"App config not found: {path}")
+def load_config(app_config_path: str | Path | None = None, project_config_path: str | Path | None = None) -> AppConfig:
+    app_path = Path(app_config_path) if app_config_path else Path(__file__).with_name("app_config.yaml")
+    root_path = Path(project_config_path) if project_config_path else Path(__file__).resolve().parents[1] / "config.yaml"
+    if not app_path.exists():
+        raise FileNotFoundError(f"App config not found: {app_path}")
 
-    with path.open("r", encoding="utf-8") as handle:
+    with app_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
 
     if not isinstance(raw, dict):
         raise ValueError("Top-level app config must be a mapping")
 
+    project_config = load_project_config(root_path)
     app = AppSettings(**_read_section(raw, "app"))
     video = VideoSettings(**_read_section(raw, "video"))
-    tracking = TrackingSettings(**_read_section(raw, "tracking"))
     overlay = OverlaySettings(**_read_section(raw, "overlay"))
+    tracking_data = asdict(project_config.tracking)
+    tracking_data.update(_read_section(raw, "tracking"))
+    tracking = TrackingSettings(**tracking_data)
 
     if app.width <= 0 or app.height <= 0:
         raise ValueError("Window size must be positive")
     if video.target_fps <= 0:
         raise ValueError("video.target_fps must be positive")
-    if tracking.trail_length < 0:
-        raise ValueError("tracking.trail_length cannot be negative")
-    if tracking.search_radius_scale < 1.0:
-        raise ValueError("tracking.search_radius_scale must be >= 1.0")
-    if tracking.selection_aspect_ratio <= 0:
-        raise ValueError("tracking.selection_aspect_ratio must be positive")
-    if not 0 < tracking.default_selection_height_fraction < 1:
-        raise ValueError("tracking.default_selection_height_fraction must be between 0 and 1")
-    if tracking.template_crop_scale <= 0:
-        raise ValueError("tracking.template_crop_scale must be positive")
-    if tracking.search_crop_scale < 1.0:
-        raise ValueError("tracking.search_crop_scale must be >= 1.0")
+    validate_tracking_settings(tracking)
 
     return AppConfig(
         app=app,
         video=video,
         tracking=tracking,
         overlay=overlay,
-        config_path=path,
+        app_config_path=app_path,
+        project_config_path=root_path,
     )

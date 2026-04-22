@@ -40,3 +40,5 @@ data/input/*.mp4
 # Claude Code local settings
 .claude/
 CLAUDE.md
+
+submissions/
