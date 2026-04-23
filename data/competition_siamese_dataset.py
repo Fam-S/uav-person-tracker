@@ -177,6 +177,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
 
         sequences = load_sequences(self.raw_root, "train")
         self.indexed_sequences = self._build_index(sequences)
+        self._bad_video_paths: set[Path] = set()
         if not self.indexed_sequences:
             raise ValueError("No train sequences contain at least two visible target frames.")
 
@@ -201,7 +202,15 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         return np.random.default_rng(self.seed + int(index))
 
     def _sample_pair(self, rng: np.random.Generator) -> tuple[SequenceRecord, int, int]:
-        indexed_sequence = self.indexed_sequences[int(rng.integers(len(self.indexed_sequences)))]
+        available_sequences = [
+            indexed
+            for indexed in self.indexed_sequences
+            if indexed.sequence.video_path not in self._bad_video_paths
+        ]
+        if not available_sequences:
+            raise RuntimeError("No readable train sequences remain after filtering bad videos.")
+
+        indexed_sequence = available_sequences[int(rng.integers(len(available_sequences)))]
         valid_indices = indexed_sequence.valid_indices
 
         template_pos = int(rng.integers(0, valid_indices.size - 1))
@@ -235,6 +244,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
                 search_frame = _load_frame(sequence.video_path, search_index)
             except RuntimeError as error:
                 last_error = error
+                self._bad_video_paths.add(sequence.video_path)
                 current_index = int(rng.integers(self.samples_per_epoch))
                 continue
 
