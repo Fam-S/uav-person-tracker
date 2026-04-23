@@ -16,22 +16,6 @@ def _is_present(box_xywh: np.ndarray) -> bool:
     return bool(box_xywh[2] > 1.0 and box_xywh[3] > 1.0)
 
 
-def _load_frame(video_path: Path, frame_index: int) -> np.ndarray:
-    import cv2
-
-    capture = cv2.VideoCapture(str(video_path))
-    if not capture.isOpened():
-        raise RuntimeError(f"Could not open video: {video_path}")
-    try:
-        capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
-        ok, frame = capture.read()
-        if not ok or frame is None:
-            raise RuntimeError(f"Could not read frame {frame_index} from {video_path}.")
-        return frame
-    finally:
-        capture.release()
-
-
 @dataclass(frozen=True)
 class SequenceIndex:
     sequence: SequenceRecord
@@ -64,6 +48,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         self.scale_jitter = float(scale_jitter)
         self.seed = int(seed)
         self._bad_video_paths: set[Path] = set()
+        self._captures: dict[Path, object] = {}
 
         sequences = load_sequences(self.raw_root, "train")
         self.indexed_sequences = self._build_index(sequences)
@@ -87,8 +72,44 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
     def __len__(self) -> int:
         return self.samples_per_epoch
 
+    def close(self) -> None:
+        for capture in self._captures.values():
+            capture.release()
+        self._captures.clear()
+
+    def __del__(self) -> None:
+        self.close()
+
     def _rng_for_index(self, index: int) -> np.random.Generator:
         return np.random.default_rng(self.seed + int(index))
+
+    def _get_capture(self, video_path: Path):
+        import cv2
+
+        capture = self._captures.get(video_path)
+        if capture is None:
+            capture = cv2.VideoCapture(str(video_path))
+            if not capture.isOpened():
+                capture.release()
+                raise RuntimeError(f"Could not open video: {video_path}")
+            self._captures[video_path] = capture
+        return capture
+
+    def _release_capture(self, video_path: Path) -> None:
+        capture = self._captures.pop(video_path, None)
+        if capture is not None:
+            capture.release()
+
+    def _load_frame(self, video_path: Path, frame_index: int) -> np.ndarray:
+        import cv2
+
+        capture = self._get_capture(video_path)
+        capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            self._release_capture(video_path)
+            raise RuntimeError(f"Could not read frame {frame_index} from {video_path}.")
+        return frame
 
     def _sample_pair(self, rng: np.random.Generator) -> tuple[SequenceRecord, int, int]:
         available_sequences = [item for item in self.indexed_sequences if item.sequence.video_path not in self._bad_video_paths]
@@ -125,12 +146,13 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
             search_box = sequence.gt_boxes_xywh[search_index]
 
             try:
-                template_frame = _load_frame(sequence.video_path, template_index)
-                search_frame = _load_frame(sequence.video_path, search_index)
+                template_frame = self._load_frame(sequence.video_path, template_index)
+                search_frame = self._load_frame(sequence.video_path, search_index)
             except RuntimeError as exc:
                 # Some competition videos are unreadable/corrupt on disk; skip them
                 # for the rest of this worker instead of crashing the whole epoch.
                 self._bad_video_paths.add(sequence.video_path)
+                self._release_capture(sequence.video_path)
                 last_error = exc
                 continue
 

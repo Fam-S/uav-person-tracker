@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 import torch
 
-import data.competition_siamese_dataset as competition_siamese_dataset
 from data import CompetitionSiameseDataset
 
 
@@ -124,15 +123,6 @@ def test_dataset_skips_unreadable_video_and_resamples(tmp_path: Path, monkeypatc
     }
     (metadata_dir / "contestant_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    real_load_frame = competition_siamese_dataset._load_frame
-
-    def fake_load_frame(video_path: Path, frame_index: int) -> np.ndarray:
-        if video_path == broken_video_path:
-            raise RuntimeError(f"Could not open video: {video_path}")
-        return real_load_frame(video_path, frame_index)
-
-    monkeypatch.setattr(competition_siamese_dataset, "_load_frame", fake_load_frame)
-
     dataset = CompetitionSiameseDataset(
         raw_root=raw_root,
         template_size=127,
@@ -140,6 +130,14 @@ def test_dataset_skips_unreadable_video_and_resamples(tmp_path: Path, monkeypatc
         samples_per_epoch=1,
         seed=0,
     )
+    real_load_frame = dataset._load_frame
+
+    def fake_load_frame(video_path: Path, frame_index: int) -> np.ndarray:
+        if video_path == broken_video_path:
+            raise RuntimeError(f"Could not open video: {video_path}")
+        return real_load_frame(video_path, frame_index)
+
+    monkeypatch.setattr(dataset, "_load_frame", fake_load_frame)
 
     broken_sequence = dataset.indexed_sequences[0].sequence
     good_sequence = dataset.indexed_sequences[1].sequence
