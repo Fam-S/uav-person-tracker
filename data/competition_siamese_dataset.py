@@ -64,14 +64,29 @@ def _crop_and_resize(
     y1 += top_pad
     y2 += top_pad
 
-    x1_i = int(round(x1))
-    y1_i = int(round(y1))
-    x2_i = int(round(x2))
-    y2_i = int(round(y2))
+    x1_i = max(0, min(int(round(x1)), frame.shape[1]))
+    y1_i = max(0, min(int(round(y1)), frame.shape[0]))
+    x2_i = max(0, min(int(round(x2)), frame.shape[1]))
+    y2_i = max(0, min(int(round(y2)), frame.shape[0]))
+
+    if x2_i <= x1_i or y2_i <= y1_i:
+        raise ValueError(
+            "Crop produced invalid bounds: "
+            f"frame_shape={frame.shape}, "
+            f"crop_size={crop_size:.4f}, "
+            f"coords=({x1_i}, {y1_i}, {x2_i}, {y2_i}), "
+            f"center=({center_x:.4f}, {center_y:.4f}), "
+            f"box_xywh={box_xywh.tolist()}"
+        )
 
     crop = frame[y1_i:y2_i, x1_i:x2_i]
     if crop.size == 0:
-        raise ValueError("Crop produced an empty patch.")
+        raise ValueError(
+            "Crop produced an empty patch: "
+            f"frame_shape={frame.shape}, "
+            f"coords=({x1_i}, {y1_i}, {x2_i}, {y2_i}), "
+            f"box_xywh={box_xywh.tolist()}"
+        )
     return cv2.resize(crop, (out_size, out_size), interpolation=cv2.INTER_LINEAR)
 
 
@@ -205,61 +220,74 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         return indexed_sequence.sequence, template_index, search_index
 
     def __getitem__(self, index: int) -> dict[str, Tensor | str | int]:
-        rng = self._rng_for_index(index)
-        sequence, template_index, search_index = self._sample_pair(rng)
+        last_error: ValueError | None = None
+        current_index = int(index)
 
-        template_box = sequence.gt_boxes_xywh[template_index]
-        search_box = sequence.gt_boxes_xywh[search_index]
+        for _ in range(10):
+            rng = self._rng_for_index(current_index)
+            sequence, template_index, search_index = self._sample_pair(rng)
 
-        template_frame = _load_frame(sequence.video_path, template_index)
-        search_frame = _load_frame(sequence.video_path, search_index)
+            template_box = sequence.gt_boxes_xywh[template_index]
+            search_box = sequence.gt_boxes_xywh[search_index]
 
-        search_center = _xywh_to_center(search_box)[:2]
+            template_frame = _load_frame(sequence.video_path, template_index)
+            search_frame = _load_frame(sequence.video_path, search_index)
 
-        scale_factor = 1.0
-        if self.scale_jitter > 0:
-            scale_factor = 1.0 + rng.uniform(-self.scale_jitter, self.scale_jitter)
-            scale_factor = max(0.5, scale_factor)
+            search_center = _xywh_to_center(search_box)[:2]
 
-        template_patch = _crop_and_resize(
-            template_frame,
-            template_box,
-            out_size=self.template_size,
-            context_amount=self.context_amount,
-            area_scale=1.0,
-        )
+            scale_factor = 1.0
+            if self.scale_jitter > 0:
+                scale_factor = 1.0 + rng.uniform(-self.scale_jitter, self.scale_jitter)
+                scale_factor = max(0.5, scale_factor)
 
-        tx_jitter, ty_jitter = 0.0, 0.0
-        if self.translation_jitter > 0:
-            tx_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
-            ty_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
-        jittered_center = (
-            search_center[0] + tx_jitter * search_box[2],
-            search_center[1] + ty_jitter * search_box[3],
-        )
+            tx_jitter, ty_jitter = 0.0, 0.0
+            if self.translation_jitter > 0:
+                tx_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
+                ty_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
+            jittered_center = (
+                search_center[0] + tx_jitter * search_box[2],
+                search_center[1] + ty_jitter * search_box[3],
+            )
 
-        search_patch = _crop_and_resize(
-            search_frame,
-            template_box,
-            out_size=self.search_size,
-            context_amount=self.context_amount,
-            center_override=jittered_center,
-            area_scale=2.0 * scale_factor,
-        )
-        search_bbox_xywh = _project_box_to_crop(
-            search_box_xywh=search_box,
-            reference_box_xywh=template_box,
-            out_size=self.search_size,
-            context_amount=self.context_amount,
-            center_override=jittered_center,
-            area_scale=2.0 * scale_factor,
-        )
+            try:
+                template_patch = _crop_and_resize(
+                    template_frame,
+                    template_box,
+                    out_size=self.template_size,
+                    context_amount=self.context_amount,
+                    area_scale=1.0,
+                )
+                search_patch = _crop_and_resize(
+                    search_frame,
+                    template_box,
+                    out_size=self.search_size,
+                    context_amount=self.context_amount,
+                    center_override=jittered_center,
+                    area_scale=2.0 * scale_factor,
+                )
+            except ValueError as error:
+                last_error = error
+                current_index = int(rng.integers(self.samples_per_epoch))
+                continue
 
-        return {
-            "template": _frame_to_tensor(template_patch),
-            "search": _frame_to_tensor(search_patch),
-            "search_bbox_xywh": torch.from_numpy(search_bbox_xywh.copy()),
-            "seq_id": sequence.seq_id,
-            "template_index": template_index,
-            "search_index": search_index,
-        }
+            search_bbox_xywh = _project_box_to_crop(
+                search_box_xywh=search_box,
+                reference_box_xywh=template_box,
+                out_size=self.search_size,
+                context_amount=self.context_amount,
+                center_override=jittered_center,
+                area_scale=2.0 * scale_factor,
+            )
+
+            return {
+                "template": _frame_to_tensor(template_patch),
+                "search": _frame_to_tensor(search_patch),
+                "search_bbox_xywh": torch.from_numpy(search_bbox_xywh.copy()),
+                "seq_id": sequence.seq_id,
+                "template_index": template_index,
+                "search_index": search_index,
+            }
+
+        raise RuntimeError(
+            f"Failed to sample a valid crop after 10 attempts for dataset index {index}."
+        ) from last_error
