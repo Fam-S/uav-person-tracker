@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -64,12 +63,18 @@ class SiameseTrainer:
             scale_jitter=self.config.train.scale_jitter,
             seed=0,
         )
+        dataloader_kwargs: dict[str, object] = {}
+        if self.config.train.num_workers > 0:
+            # Keep worker prefetch shallow so random-access video decoding does not
+            # queue too many decoded samples in RAM at once.
+            dataloader_kwargs["prefetch_factor"] = 1
         return DataLoader(
             dataset,
             batch_size=self.config.train.batch_size,
             shuffle=False,
             num_workers=self.config.train.num_workers,
             pin_memory=self.config.train.pin_memory and self.device.type == "cuda",
+            **dataloader_kwargs,
         )
 
     def train_epoch(self, dataloader: DataLoader, epoch: int) -> EpochStats:
@@ -176,20 +181,13 @@ def run_training(config: ProjectConfig) -> list[EpochStats]:
 
 
 def main() -> None:
+    import argparse
+
     parser = argparse.ArgumentParser(description="Train the minimal SiamAPN++ + MobileOne-S2 model.")
     parser.add_argument("--config", type=str, default=None)
-    parser.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
-                        help="Override config value, e.g. --override train.dataset_root=/kaggle/input/data")
     args = parser.parse_args()
 
-    overrides = {}
-    for item in args.override:
-        key, _, value = item.partition("=")
-        if not key or not value:
-            parser.error(f"Invalid --override format: '{item}'. Use KEY=VALUE.")
-        overrides[key] = value
-
-    config = load_config(args.config, overrides=overrides or None)
+    config = load_config(args.config)
     run_training(config)
 
 

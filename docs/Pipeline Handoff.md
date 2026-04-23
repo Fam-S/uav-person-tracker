@@ -24,11 +24,11 @@ SiamAPN-style siamese tracker with Apple's MobileOne-S2 backbone. Trains on comp
    !mkdir -p checkpoints
    !curl -L -o checkpoints/mobileone_s2_unfused.pth.tar https://docs-assets.developer.apple.com/ml-research/datasets/mobileone/mobileone_s2_unfused.pth.tar
    ```
-6. No need to edit `config.yaml` — use `--override` flags instead:
+6. Update `config.yaml` with the config CLI before training:
    ```bash
-   !uv run train --override train.dataset_root=/kaggle/input/competition-name \
-                  --override train.epochs=20 \
-                  --override train.batch_size=16
+   !uv run project-config set train.dataset_root /kaggle/input/competition-name
+   !uv run project-config set train.epochs 20
+   !uv run project-config set train.batch_size 16
    ```
 7. For submission output, update `--output` to write to `/kaggle/working/` so you can download it.
 

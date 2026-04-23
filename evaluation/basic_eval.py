@@ -106,18 +106,9 @@ def main():
     parser.add_argument("--raw-root", default="data/raw")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--output", default="evaluation/submissions/public_lb_submission.csv")
-    parser.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
-                        help="Override config value, e.g. --override tracking.backend=csrt")
     args = parser.parse_args()
 
-    overrides = {}
-    for item in args.override:
-        key, _, value = item.partition("=")
-        if not key or not value:
-            parser.error(f"Invalid --override format: '{item}'. Use KEY=VALUE.")
-        overrides[key] = value
-
-    project_config = load_config(args.config, overrides=overrides or None)
+    project_config = load_config(args.config)
 
     # Load only the sequences that belong to the public leaderboard split.
     sequences = load_sequences(args.raw_root, "public_lb")

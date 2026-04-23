@@ -249,14 +249,23 @@ Point `train.dataset_root` at the competition raw-data directory containing:
 ```bash
 # Using uv
 uv run train --config config.yaml
+uv run project-config set train.epochs 20
 
 # Using python directly
 python train/run.py --config config.yaml
+python -m train.config_cli set train.epochs 20
 ```
 
 Options:
 
 * `--config <path>` — path to YAML config (default: `config.yaml`)
+
+Config CLI:
+
+* `uv run project-config show`
+* `uv run project-config list-keys`
+* `uv run project-config get train.batch_size`
+* `uv run project-config set train.batch_size 16`
 
 ### Run the Desktop GUI
 

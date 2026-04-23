@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-from decord import VideoReader, cpu
 from torch import Tensor
 from torch.utils.data import Dataset
 
 from data.competition_data import SequenceRecord, load_sequences
 from data.crop_utils import crop_and_resize, frame_to_tensor, project_box_to_crop, xywh_to_center
+
+if TYPE_CHECKING:
+    from decord import VideoReader
 
 
 def _is_present(box_xywh: np.ndarray) -> bool:
@@ -50,7 +54,11 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         self.seed = int(seed)
         self.epoch = 0
         self._bad_video_paths: set[Path] = set()
-        self._readers: dict[Path, VideoReader] = {}
+        # Keep only a tiny number of live decoders per worker. Random video sampling
+        # plus DataLoader prefetch can otherwise accumulate many open readers and
+        # trigger the OOM killer on constrained environments like Kaggle.
+        self._max_open_readers = 2
+        self._readers: OrderedDict[Path, VideoReader] = OrderedDict()
 
         sequences = load_sequences(self.raw_root, "train")
         self.indexed_sequences = self._build_index(sequences)
@@ -88,6 +96,8 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         return np.random.default_rng(sample_seed)
 
     def _get_reader(self, video_path: Path) -> VideoReader:
+        from decord import VideoReader, cpu
+
         reader = self._readers.get(video_path)
         if reader is None:
             try:
@@ -95,6 +105,11 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
             except Exception as exc:
                 raise RuntimeError(f"Could not open video: {video_path}") from exc
             self._readers[video_path] = reader
+            while len(self._readers) > self._max_open_readers:
+                self._readers.popitem(last=False)
+            return reader
+
+        self._readers.move_to_end(video_path)
         return reader
 
     def _release_reader(self, video_path: Path) -> None:

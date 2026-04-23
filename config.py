@@ -1,3 +1,5 @@
+from copy import deepcopy
+from dataclasses import asdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,14 +97,12 @@ def _read_section(data, section):
     return value
 
 
-def _apply_overrides(raw: dict, overrides: dict[str, str]) -> None:
-    for key, value in overrides.items():
-        parts = key.split(".")
-        section_name = parts[0]
-        field_name = ".".join(parts[1:])
-        if section_name not in raw:
-            raw[section_name] = {}
-        raw[section_name][field_name] = _parse_value(value)
+def _default_config_path() -> Path:
+    return Path(__file__).with_name("config.yaml")
+
+
+def _normalize_config_path(config_path: str | Path | None = None) -> Path:
+    return Path(config_path) if config_path else _default_config_path()
 
 
 def _parse_value(value: str):
@@ -121,8 +121,8 @@ def _parse_value(value: str):
     return value
 
 
-def load_config(config_path=None, overrides: dict[str, str] | None = None):
-    path = Path(config_path) if config_path else Path(__file__).with_name("config.yaml")
+def load_raw_config(config_path: str | Path | None = None) -> tuple[dict, Path]:
+    path = _normalize_config_path(config_path)
     if not path.exists():
         raise FileNotFoundError(f"Project config not found: {path}")
 
@@ -132,9 +132,71 @@ def load_config(config_path=None, overrides: dict[str, str] | None = None):
     if not isinstance(raw, dict):
         raise ValueError("Top-level project config must be a mapping")
 
-    if overrides:
-        _apply_overrides(raw, overrides)
+    return raw, path
 
+
+def write_raw_config(raw: dict, config_path: str | Path | None = None) -> Path:
+    path = _normalize_config_path(config_path)
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(raw, handle, sort_keys=False)
+    return path
+
+
+def get_config_value(raw: dict, dotted_key: str):
+    if not dotted_key:
+        raise ValueError("Config key cannot be empty")
+
+    value = raw
+    for part in dotted_key.split("."):
+        if not isinstance(value, dict) or part not in value:
+            raise KeyError(dotted_key)
+        value = value[part]
+    return value
+
+
+def set_config_value(raw: dict, dotted_key: str, value) -> None:
+    if not dotted_key:
+        raise ValueError("Config key cannot be empty")
+
+    parts = dotted_key.split(".")
+    cursor = raw
+    for part in parts[:-1]:
+        next_value = cursor.get(part)
+        if next_value is None:
+            next_value = {}
+            cursor[part] = next_value
+        if not isinstance(next_value, dict):
+            raise ValueError(f"Config key '{part}' is not a mapping")
+        cursor = next_value
+    cursor[parts[-1]] = value
+
+
+def list_config_keys(raw: dict) -> list[str]:
+    keys: list[str] = []
+
+    def _visit(prefix: str, value) -> None:
+        if not isinstance(value, dict):
+            keys.append(prefix)
+            return
+        for child_key, child_value in value.items():
+            child_prefix = f"{prefix}.{child_key}" if prefix else child_key
+            _visit(child_prefix, child_value)
+
+    _visit("", raw)
+    return keys
+
+
+def serialize_config(config: ProjectConfig) -> dict:
+    return {
+        "model": asdict(config.model),
+        "train": asdict(config.train),
+        "infer": asdict(config.infer),
+        "tracking": asdict(config.tracking),
+    }
+
+
+def build_config(raw: dict, config_path: str | Path | None = None) -> ProjectConfig:
+    path = _normalize_config_path(config_path)
     model = ModelSettings(**_read_section(raw, "model"))
     train = TrainSettings(**_read_section(raw, "train"))
     infer = InferSettings(**_read_section(raw, "infer"))
@@ -161,3 +223,12 @@ def load_config(config_path=None, overrides: dict[str, str] | None = None):
         tracking=tracking,
         config_path=path,
     )
+
+
+def validate_raw_config(raw: dict, config_path: str | Path | None = None) -> ProjectConfig:
+    return build_config(deepcopy(raw), config_path)
+
+
+def load_config(config_path=None):
+    raw, path = load_raw_config(config_path)
+    return build_config(raw, path)

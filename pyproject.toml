@@ -41,6 +41,7 @@ packages = ["models", "data", "train", "app"]
 
 [project.scripts]
 train = "train.run:main"
+project-config = "train.config_cli:main"
 
 [dependency-groups]
 ui = [
