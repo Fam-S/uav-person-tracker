@@ -78,6 +78,8 @@ class SiameseTrainer:
         total_loss_sum = 0.0
         reg_loss_sum = 0.0
         num_batches = 0
+        report_every = 20
+        total_batches = len(dataloader)
 
         for batch in dataloader:
             # Move one batch of tensors from CPU memory into the training device.
@@ -98,6 +100,14 @@ class SiameseTrainer:
             total_loss_sum += float(loss_out.total_loss.detach().cpu())
             reg_loss_sum += float(loss_out.reg_loss.detach().cpu())
             num_batches += 1
+
+            if num_batches % report_every == 0 or num_batches == total_batches:
+                print(
+                    f"epoch={epoch} batch={num_batches}/{total_batches} "
+                    f"loss={total_loss_sum / num_batches:.4f} "
+                    f"reg={reg_loss_sum / num_batches:.4f}",
+                    flush=True,
+                )
 
         if num_batches == 0:
             raise ValueError("Training dataloader produced zero batches.")
