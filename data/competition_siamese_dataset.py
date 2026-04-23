@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from decord import VideoReader, cpu
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -48,7 +49,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         self.scale_jitter = float(scale_jitter)
         self.seed = int(seed)
         self._bad_video_paths: set[Path] = set()
-        self._captures: dict[Path, object] = {}
+        self._readers: dict[Path, VideoReader] = {}
 
         sequences = load_sequences(self.raw_root, "train")
         self.indexed_sequences = self._build_index(sequences)
@@ -73,9 +74,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         return self.samples_per_epoch
 
     def close(self) -> None:
-        for capture in self._captures.values():
-            capture.release()
-        self._captures.clear()
+        self._readers.clear()
 
     def __del__(self) -> None:
         self.close()
@@ -83,33 +82,39 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
     def _rng_for_index(self, index: int) -> np.random.Generator:
         return np.random.default_rng(self.seed + int(index))
 
-    def _get_capture(self, video_path: Path):
-        import cv2
+    def _get_reader(self, video_path: Path) -> VideoReader:
+        reader = self._readers.get(video_path)
+        if reader is None:
+            try:
+                reader = VideoReader(str(video_path), ctx=cpu(0))
+            except Exception as exc:
+                raise RuntimeError(f"Could not open video: {video_path}") from exc
+            self._readers[video_path] = reader
+        return reader
 
-        capture = self._captures.get(video_path)
-        if capture is None:
-            capture = cv2.VideoCapture(str(video_path))
-            if not capture.isOpened():
-                capture.release()
-                raise RuntimeError(f"Could not open video: {video_path}")
-            self._captures[video_path] = capture
-        return capture
-
-    def _release_capture(self, video_path: Path) -> None:
-        capture = self._captures.pop(video_path, None)
-        if capture is not None:
-            capture.release()
+    def _release_reader(self, video_path: Path) -> None:
+        self._readers.pop(video_path, None)
 
     def _load_frame(self, video_path: Path, frame_index: int) -> np.ndarray:
-        import cv2
+        reader = self._get_reader(video_path)
+        try:
+            frame_rgb = reader[int(frame_index)].asnumpy()
+        except Exception as exc:
+            self._release_reader(video_path)
+            raise RuntimeError(f"Could not read frame {frame_index} from {video_path}.") from exc
+        return np.ascontiguousarray(frame_rgb[:, :, ::-1])
 
-        capture = self._get_capture(video_path)
-        capture.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
-        ok, frame = capture.read()
-        if not ok or frame is None:
-            self._release_capture(video_path)
-            raise RuntimeError(f"Could not read frame {frame_index} from {video_path}.")
-        return frame
+    def _load_frame_pair(self, video_path: Path, template_index: int, search_index: int) -> tuple[np.ndarray, np.ndarray]:
+        reader = self._get_reader(video_path)
+        try:
+            frames_rgb = reader.get_batch([int(template_index), int(search_index)]).asnumpy()
+        except Exception as exc:
+            self._release_reader(video_path)
+            raise RuntimeError(
+                f"Could not read frames {template_index} and {search_index} from {video_path}."
+            ) from exc
+        frames_bgr = np.ascontiguousarray(frames_rgb[:, :, :, ::-1])
+        return frames_bgr[0], frames_bgr[1]
 
     def _sample_pair(self, rng: np.random.Generator) -> tuple[SequenceRecord, int, int]:
         available_sequences = [item for item in self.indexed_sequences if item.sequence.video_path not in self._bad_video_paths]
@@ -146,13 +151,16 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
             search_box = sequence.gt_boxes_xywh[search_index]
 
             try:
-                template_frame = self._load_frame(sequence.video_path, template_index)
-                search_frame = self._load_frame(sequence.video_path, search_index)
+                template_frame, search_frame = self._load_frame_pair(
+                    sequence.video_path,
+                    template_index,
+                    search_index,
+                )
             except RuntimeError as exc:
                 # Some competition videos are unreadable/corrupt on disk; skip them
                 # for the rest of this worker instead of crashing the whole epoch.
                 self._bad_video_paths.add(sequence.video_path)
-                self._release_capture(sequence.video_path)
+                self._release_reader(sequence.video_path)
                 last_error = exc
                 continue
 

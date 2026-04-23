@@ -23,6 +23,7 @@ dependencies = [
     "matplotlib>=3.7",
     "tqdm>=4.65",
     "wrapt>=2.1.2",
+    "decord>=0.6.0",
 ]
 
 [[tool.uv.index]]

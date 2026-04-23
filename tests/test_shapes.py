@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 from data import CompetitionSiameseDataset
 
@@ -130,14 +131,14 @@ def test_dataset_skips_unreadable_video_and_resamples(tmp_path: Path, monkeypatc
         samples_per_epoch=1,
         seed=0,
     )
-    real_load_frame = dataset._load_frame
+    real_load_frame_pair = dataset._load_frame_pair
 
-    def fake_load_frame(video_path: Path, frame_index: int) -> np.ndarray:
+    def fake_load_frame_pair(video_path: Path, template_index: int, search_index: int) -> tuple[np.ndarray, np.ndarray]:
         if video_path == broken_video_path:
             raise RuntimeError(f"Could not open video: {video_path}")
-        return real_load_frame(video_path, frame_index)
+        return real_load_frame_pair(video_path, template_index, search_index)
 
-    monkeypatch.setattr(dataset, "_load_frame", fake_load_frame)
+    monkeypatch.setattr(dataset, "_load_frame_pair", fake_load_frame_pair)
 
     broken_sequence = dataset.indexed_sequences[0].sequence
     good_sequence = dataset.indexed_sequences[1].sequence
@@ -153,3 +154,32 @@ def test_dataset_skips_unreadable_video_and_resamples(tmp_path: Path, monkeypatc
 
     assert sample["seq_id"] == "dataset1/good"
     assert broken_video_path in dataset._bad_video_paths
+
+
+def test_dataloader_smoke_with_workers(tmp_path: Path):
+    raw_root = _make_raw_root(tmp_path)
+    dataset = CompetitionSiameseDataset(
+        raw_root=raw_root,
+        template_size=127,
+        search_size=255,
+        samples_per_epoch=4,
+        seed=7,
+    )
+    dataloader = DataLoader(
+        dataset,
+        batch_size=2,
+        shuffle=False,
+        num_workers=2,
+    )
+
+    batch = next(iter(dataloader))
+
+    assert batch["template"].shape == (2, 3, 127, 127)
+    assert batch["search"].shape == (2, 3, 255, 255)
+    assert batch["search_bbox_xywh"].shape == (2, 4)
+    assert batch["template"].dtype == torch.float32
+    assert batch["search"].dtype == torch.float32
+    assert torch.isfinite(batch["search_bbox_xywh"]).all()
+    assert list(batch["seq_id"]) == ["dataset1/person1", "dataset1/person1"]
+    assert batch["template_index"].shape == (2,)
+    assert batch["search_index"].shape == (2,)
