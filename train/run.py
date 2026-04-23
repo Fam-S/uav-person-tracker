@@ -48,7 +48,10 @@ class SiameseTrainer:
         self.best_loss = float("inf")
 
     def build_dataloader(self) -> DataLoader:
-        clean_manifest_path, skipped = build_clean_train_manifest(self.config.train.dataset_root)
+        clean_manifest_path, skipped = build_clean_train_manifest(
+            self.config.train.dataset_root,
+            output_path=self.checkpoint_dir / "contestant_manifest.cleaned.json",
+        )
         if skipped:
             print(f"skipping {len(skipped)} unreadable training videos")
         sequences = load_sequences(
