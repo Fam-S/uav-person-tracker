@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from config import ProjectConfig, load_config
 from data import CompetitionSiameseDataset
@@ -25,18 +26,23 @@ class EpochStats:
 class SiameseTrainer:
     def __init__(self, config: ProjectConfig) -> None:
         self.config = config
+        # Use the configured device when possible, but fall back to CPU if CUDA was requested
+        # on a machine that does not have a GPU.
         self.device = torch.device(
             config.train.device if torch.cuda.is_available() or config.train.device == "cpu" else "cpu"
         )
+        # The model predicts the target box inside the search crop.
         self.model = SiamAPNppMobileOne(
             feature_channels=config.model.feature_channels,
             pretrained_path=config.model.pretrained_path if config.model.pretrained else None,
             normalize_input=config.model.normalize_input,
         ).to(self.device)
+        # The loss compares predicted search-crop boxes against dataset targets.
         self.criterion = SiamAPNLoss(
             search_size=config.model.search_size,
             smooth_l1_beta=config.train.smooth_l1_beta,
         ).to(self.device)
+        # Adam updates the model weights after every batch.
         self.optimizer = torch.optim.Adam(
             self.model.parameters(),
             lr=config.train.learning_rate,
@@ -47,6 +53,8 @@ class SiameseTrainer:
         self.best_loss = float("inf")
 
     def build_dataloader(self) -> DataLoader:
+        # The dataset generates template/search pairs on demand instead of storing
+        # every training pair on disk ahead of time.
         dataset = CompetitionSiameseDataset(
             raw_root=self.config.train.dataset_root,
             template_size=self.config.model.template_size,
@@ -66,26 +74,36 @@ class SiameseTrainer:
         )
 
     def train_epoch(self, dataloader: DataLoader, epoch: int) -> EpochStats:
+        # train() enables training-time behavior such as BatchNorm updates.
         self.model.train()
         total_loss_sum = 0.0
         reg_loss_sum = 0.0
         num_batches = 0
 
-        for batch in dataloader:
+        progress = tqdm(dataloader, desc=f"epoch {epoch}", unit="batch")
+        for batch in progress:
+            # Move one batch of tensors from CPU memory into the training device.
             template = batch["template"].to(self.device)
             search = batch["search"].to(self.device)
             search_bbox = batch["search_bbox_xywh"].to(self.device)
 
+            # Forward pass: the model predicts one box for each template/search pair.
             outputs = self.model(template, search)
             loss_out = self.criterion(bbox_pred=outputs["bbox_pred"], search_bbox=search_bbox)
 
+            # Backward pass: clear old gradients, compute new gradients, then update weights.
             self.optimizer.zero_grad(set_to_none=True)
             loss_out.total_loss.backward()
             self.optimizer.step()
 
+            # Keep running averages so the progress bar shows how the epoch is going.
             total_loss_sum += float(loss_out.total_loss.detach().cpu())
             reg_loss_sum += float(loss_out.reg_loss.detach().cpu())
             num_batches += 1
+            progress.set_postfix(
+                loss=f"{total_loss_sum / num_batches:.4f}",
+                reg=f"{reg_loss_sum / num_batches:.4f}",
+            )
 
         if num_batches == 0:
             raise ValueError("Training dataloader produced zero batches.")
@@ -100,6 +118,7 @@ class SiameseTrainer:
 
     def save_checkpoint(self, epoch: int, stats: EpochStats, is_best: bool = False) -> Path:
         checkpoint_path = self.checkpoint_dir / f"epoch_{epoch:03d}.pth"
+        # Save enough information to reload the model and optimizer later.
         torch.save(
             {
                 "epoch": epoch,
@@ -111,6 +130,7 @@ class SiameseTrainer:
             checkpoint_path,
         )
         if is_best:
+            # Keep a second copy with a stable filename for easy evaluation/inference.
             best_path = self.checkpoint_dir / "best.pth"
             torch.save(
                 {
@@ -126,12 +146,14 @@ class SiameseTrainer:
 
 
 def run_training(config: ProjectConfig) -> list[EpochStats]:
+    # Build everything once, then reuse the same dataloader across epochs.
     trainer = SiameseTrainer(config)
     dataloader = trainer.build_dataloader()
     history: list[EpochStats] = []
 
     print(f"device={trainer.device} batches_per_epoch={len(dataloader)}")
     for epoch in range(1, config.train.epochs + 1):
+        # One epoch means iterating through all sampled batches once.
         stats = trainer.train_epoch(dataloader, epoch)
         is_best = stats.mean_total_loss < trainer.best_loss
         if is_best:
