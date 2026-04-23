@@ -158,6 +158,7 @@ def run_training(config: ProjectConfig) -> list[EpochStats]:
     print(f"device={trainer.device} batches_per_epoch={len(dataloader)}")
     for epoch in range(1, config.train.epochs + 1):
         # One epoch means iterating through all sampled batches once.
+        dataloader.dataset.set_epoch(epoch)
         stats = trainer.train_epoch(dataloader, epoch)
         is_best = stats.mean_total_loss < trainer.best_loss
         if is_best:

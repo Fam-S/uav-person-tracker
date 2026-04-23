@@ -48,6 +48,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         self.translation_jitter = float(translation_jitter)
         self.scale_jitter = float(scale_jitter)
         self.seed = int(seed)
+        self.epoch = 0
         self._bad_video_paths: set[Path] = set()
         self._readers: dict[Path, VideoReader] = {}
 
@@ -79,8 +80,12 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
     def __del__(self) -> None:
         self.close()
 
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
     def _rng_for_index(self, index: int) -> np.random.Generator:
-        return np.random.default_rng(self.seed + int(index))
+        sample_seed = self.seed + self.epoch * self.samples_per_epoch + int(index)
+        return np.random.default_rng(sample_seed)
 
     def _get_reader(self, video_path: Path) -> VideoReader:
         reader = self._readers.get(video_path)
