@@ -43,3 +43,22 @@ def test_project_box_to_crop_clips_edges_consistently():
     )
 
     assert np.allclose(crop_box, np.asarray([0.0, 63.75, 127.5, 127.5], dtype=np.float32), atol=1e-4)
+
+
+def test_crop_and_resize_handles_fractional_left_top_padding():
+    from data.crop_utils import crop_and_resize
+
+    frame = np.full((8, 8, 3), fill_value=127, dtype=np.uint8)
+    box = np.asarray([0.0, 0.0, 2.0, 2.0], dtype=np.float32)
+
+    crop = crop_and_resize(
+        frame,
+        box,
+        out_size=16,
+        context_amount=0.0,
+        center_override=(0.4, 0.4),
+        area_scale=1.0,
+    )
+
+    assert crop.shape == (16, 16, 3)
+    assert crop.dtype == np.uint8

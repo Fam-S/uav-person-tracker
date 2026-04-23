@@ -44,8 +44,8 @@ def crop_and_resize(
     x2 = center_x + (crop_size / 2.0)
     y2 = center_y + (crop_size / 2.0)
 
-    left_pad = max(0, int(math.floor(-x1)))
-    top_pad = max(0, int(math.floor(-y1)))
+    left_pad = max(0, int(math.ceil(-x1)))
+    top_pad = max(0, int(math.ceil(-y1)))
     right_pad = max(0, int(math.ceil(x2 - frame_w)))
     bottom_pad = max(0, int(math.ceil(y2 - frame_h)))
 

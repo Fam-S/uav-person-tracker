@@ -8,6 +8,7 @@ SiamAPN-style siamese tracker with Apple's MobileOne-S2 backbone. Trains on comp
 
 1. Create a new Kaggle notebook with **GPU** accelerator
 2. Add the competition dataset (it will be available at `/kaggle/input/...`)
+   Use `/kaggle/input/datasets/abdulhamedeid/mtc-aic4-uav-dataset` as the dataset root for `train.dataset_root` and evaluation `--raw-root`.
 3. Add this repo as a dataset or clone it:
    ```bash
    !git clone --branch <branch-name> https://github.com/Fam-S/uav-person-tracker.git /kaggle/working/uav-person-tracker
