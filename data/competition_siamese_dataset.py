@@ -220,7 +220,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         return indexed_sequence.sequence, template_index, search_index
 
     def __getitem__(self, index: int) -> dict[str, Tensor | str | int]:
-        last_error: ValueError | None = None
+        last_error: ValueError | RuntimeError | None = None
         current_index = int(index)
 
         for _ in range(10):
@@ -230,8 +230,13 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
             template_box = sequence.gt_boxes_xywh[template_index]
             search_box = sequence.gt_boxes_xywh[search_index]
 
-            template_frame = _load_frame(sequence.video_path, template_index)
-            search_frame = _load_frame(sequence.video_path, search_index)
+            try:
+                template_frame = _load_frame(sequence.video_path, template_index)
+                search_frame = _load_frame(sequence.video_path, search_index)
+            except RuntimeError as error:
+                last_error = error
+                current_index = int(rng.integers(self.samples_per_epoch))
+                continue
 
             search_center = _xywh_to_center(search_box)[:2]
 
@@ -289,5 +294,5 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
             }
 
         raise RuntimeError(
-            f"Failed to sample a valid crop after 10 attempts for dataset index {index}."
+            f"Failed to sample a valid item after 10 attempts for dataset index {index}."
         ) from last_error
