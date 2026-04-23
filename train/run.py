@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 
 from config import ProjectConfig, load_config
 from data import CompetitionSiameseDataset
+from data.competition_data import build_clean_train_manifest, load_sequences
 from models import SiamAPNppMobileOne
 from models.losses import SiamAPNLoss
 
@@ -47,8 +48,20 @@ class SiameseTrainer:
         self.best_loss = float("inf")
 
     def build_dataloader(self) -> DataLoader:
+        clean_manifest_path, skipped = build_clean_train_manifest(self.config.train.dataset_root)
+        if skipped:
+            print(f"skipping {len(skipped)} unreadable training videos")
+        sequences = load_sequences(
+            self.config.train.dataset_root,
+            "train",
+            manifest_path=clean_manifest_path,
+        )
+        if not sequences:
+            raise ValueError("No readable training sequences remain after preprocessing.")
+
         dataset = CompetitionSiameseDataset(
             raw_root=self.config.train.dataset_root,
+            sequences=sequences,
             template_size=self.config.model.template_size,
             search_size=self.config.model.search_size,
             context_amount=self.config.model.context_amount,

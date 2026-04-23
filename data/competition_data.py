@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 
 VALID_SPLITS = {"train", "public_lb"}
 MANIFEST_PATH = Path("metadata") / "contestant_manifest.json"
+CLEAN_MANIFEST_PATH = Path("metadata") / "contestant_manifest.cleaned.json"
 
 
 class SequenceRecord:
@@ -46,7 +48,7 @@ class SequenceRecord:
         )
 
 
-def load_sequences(raw_root, split):
+def load_sequences(raw_root, split, manifest_path=None):
     """Load one official split from the competition manifest.
     raw_root (raw data directory) should point to the directory containing the `metadata` folder and all video/annotation files.
     split (str): The split to load.
@@ -57,7 +59,7 @@ def load_sequences(raw_root, split):
 
     # The manifest already defines the official split membership and file paths,
     # so we use it as the single source of truth instead of scanning directories.
-    manifest = _load_manifest(raw_root)
+    manifest = _load_manifest(raw_root, manifest_path=manifest_path)
     entries = manifest[split]
 
     sequences = []
@@ -97,6 +99,33 @@ def load_sequences(raw_root, split):
         )
 
     return sequences
+
+
+def build_clean_train_manifest(raw_root, output_path=None):
+    """Write a manifest with unreadable train videos removed and return its path."""
+
+    raw_root = Path(raw_root)
+    output_path = Path(output_path) if output_path is not None else raw_root / CLEAN_MANIFEST_PATH
+    manifest = _load_manifest(raw_root)
+
+    cleaned_train = {}
+    skipped_seq_ids = []
+    for seq_id, entry in manifest["train"].items():
+        if _is_video_readable(raw_root / entry["video_path"]):
+            cleaned_train[seq_id] = entry
+        else:
+            skipped_seq_ids.append(seq_id)
+
+    cleaned_manifest = dict(manifest)
+    cleaned_manifest["train"] = cleaned_train
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        json.dump(cleaned_manifest, handle, indent=2)
+
+    return output_path, skipped_seq_ids
+
+
 def _normalize_split(split):
     """Validate that the requested split is supported."""
 
@@ -106,10 +135,10 @@ def _normalize_split(split):
     return split
 
 
-def _load_manifest(raw_root):
+def _load_manifest(raw_root, manifest_path=None):
     """Load the competition manifest from the raw data root."""
 
-    manifest_path = raw_root / MANIFEST_PATH
+    manifest_path = Path(manifest_path) if manifest_path is not None else raw_root / MANIFEST_PATH
     with manifest_path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
 
@@ -119,6 +148,17 @@ def _load_manifest(raw_root):
         raise ValueError(f"Manifest is missing split entries: {names}.")
 
     return manifest
+
+
+def _is_video_readable(video_path):
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        return False
+    try:
+        ok, frame = capture.read()
+        return bool(ok and frame is not None)
+    finally:
+        capture.release()
 
 
 def _load_annotation_boxes(annotation_path):
