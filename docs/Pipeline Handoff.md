@@ -91,6 +91,7 @@ models/siamapn.py                SiamAPNppMobileOne (dual-level correlation + re
 models/losses.py                 SmoothL1 regression loss
 data/competition_siamese_dataset.py  Template/search pair sampling from competition data
 data/competition_data.py         Manifest loading, sequence records
+data/crop_utils.py               Shared crop extraction and box projection helpers
 data/competition_submission.py   Submission CSV I/O
 app/tracking.py                  SiamAPNBackend, CSRTBackend, MockBackend
 train/run.py                     Training loop with best checkpoint saving

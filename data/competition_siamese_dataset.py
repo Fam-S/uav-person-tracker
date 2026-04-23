@@ -2,119 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import math
 
-import cv2
 import numpy as np
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
 from data.competition_data import SequenceRecord, load_sequences
+from data.crop_utils import crop_and_resize, frame_to_tensor, project_box_to_crop, xywh_to_center
 
 
 def _is_present(box_xywh: np.ndarray) -> bool:
     return bool(box_xywh[2] > 1.0 and box_xywh[3] > 1.0)
 
 
-def _xywh_to_center(box_xywh: np.ndarray) -> tuple[float, float, float, float]:
-    x, y, w, h = [float(v) for v in box_xywh]
-    return x + (w / 2.0), y + (h / 2.0), w, h
-
-
-def _crop_and_resize(
-    frame: np.ndarray,
-    box_xywh: np.ndarray,
-    out_size: int,
-    context_amount: float,
-    center_override: tuple[float, float] | None = None,
-    area_scale: float = 1.0,
-) -> np.ndarray:
-    frame_h, frame_w = frame.shape[:2]
-    center_x, center_y, box_w, box_h = _xywh_to_center(box_xywh)
-    if center_override is not None:
-        center_x, center_y = center_override
-
-    context = context_amount * (box_w + box_h)
-    crop_size = math.sqrt((box_w + context) * (box_h + context))
-    crop_size = max(2.0, crop_size * float(area_scale))
-
-    x1 = center_x - (crop_size / 2.0)
-    y1 = center_y - (crop_size / 2.0)
-    x2 = center_x + (crop_size / 2.0)
-    y2 = center_y + (crop_size / 2.0)
-
-    left_pad = max(0, int(math.floor(-x1)))
-    top_pad = max(0, int(math.floor(-y1)))
-    right_pad = max(0, int(math.ceil(x2 - frame_w)))
-    bottom_pad = max(0, int(math.ceil(y2 - frame_h)))
-
-    if left_pad or top_pad or right_pad or bottom_pad:
-        frame = cv2.copyMakeBorder(
-            frame,
-            top_pad,
-            bottom_pad,
-            left_pad,
-            right_pad,
-            borderType=cv2.BORDER_REPLICATE,
-        )
-
-    x1 += left_pad
-    x2 += left_pad
-    y1 += top_pad
-    y2 += top_pad
-
-    x1_i = int(round(x1))
-    y1_i = int(round(y1))
-    x2_i = int(round(x2))
-    y2_i = int(round(y2))
-
-    crop = frame[y1_i:y2_i, x1_i:x2_i]
-    if crop.size == 0:
-        raise ValueError("Crop produced an empty patch.")
-    return cv2.resize(crop, (out_size, out_size), interpolation=cv2.INTER_LINEAR)
-
-
-def _project_box_to_crop(
-    search_box_xywh: np.ndarray,
-    reference_box_xywh: np.ndarray,
-    out_size: int,
-    context_amount: float,
-    center_override: tuple[float, float] | None = None,
-    area_scale: float = 1.0,
-) -> np.ndarray:
-    center_x, center_y, ref_w, ref_h = _xywh_to_center(reference_box_xywh)
-    if center_override is not None:
-        center_x, center_y = center_override
-
-    context = context_amount * (ref_w + ref_h)
-    crop_size = math.sqrt((ref_w + context) * (ref_h + context))
-    crop_size = max(2.0, crop_size * float(area_scale))
-    scale = float(out_size) / crop_size
-
-    x, y, w, h = [float(v) for v in search_box_xywh]
-    crop_x1 = center_x - (crop_size / 2.0)
-    crop_y1 = center_y - (crop_size / 2.0)
-
-    projected = np.asarray(
-        [
-            (x - crop_x1) * scale,
-            (y - crop_y1) * scale,
-            w * scale,
-            h * scale,
-        ],
-        dtype=np.float32,
-    )
-    return np.clip(projected, a_min=0.0, a_max=float(out_size))
-
-
-def _frame_to_tensor(frame_bgr: np.ndarray) -> Tensor:
-    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    tensor = torch.from_numpy(frame_rgb).permute(2, 0, 1).contiguous().float()
-    return tensor / 255.0
-
-
 def _load_frame(video_path: Path, frame_index: int) -> np.ndarray:
+    import cv2
+
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise RuntimeError(f"Could not open video: {video_path}")
@@ -214,14 +118,14 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         template_frame = _load_frame(sequence.video_path, template_index)
         search_frame = _load_frame(sequence.video_path, search_index)
 
-        search_center = _xywh_to_center(search_box)[:2]
+        search_center = xywh_to_center(search_box)[:2]
 
         scale_factor = 1.0
         if self.scale_jitter > 0:
             scale_factor = 1.0 + rng.uniform(-self.scale_jitter, self.scale_jitter)
             scale_factor = max(0.5, scale_factor)
 
-        template_patch = _crop_and_resize(
+        template_patch = crop_and_resize(
             template_frame,
             template_box,
             out_size=self.template_size,
@@ -238,7 +142,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
             search_center[1] + ty_jitter * search_box[3],
         )
 
-        search_patch = _crop_and_resize(
+        search_patch = crop_and_resize(
             search_frame,
             template_box,
             out_size=self.search_size,
@@ -246,7 +150,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
             center_override=jittered_center,
             area_scale=2.0 * scale_factor,
         )
-        search_bbox_xywh = _project_box_to_crop(
+        search_bbox_xywh = project_box_to_crop(
             search_box_xywh=search_box,
             reference_box_xywh=template_box,
             out_size=self.search_size,
@@ -256,8 +160,8 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         )
 
         return {
-            "template": _frame_to_tensor(template_patch),
-            "search": _frame_to_tensor(search_patch),
+            "template": frame_to_tensor(template_patch),
+            "search": frame_to_tensor(search_patch),
             "search_bbox_xywh": torch.from_numpy(search_bbox_xywh.copy()),
             "seq_id": sequence.seq_id,
             "template_index": template_index,

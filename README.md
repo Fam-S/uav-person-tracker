@@ -177,8 +177,11 @@ uav-person-tracker/
 │   └── ...                     # Tracker-specific model code
 │
 ├── data/                       # Data pipeline
-│   ├── dataset.py              # UAV123SiameseDataset
-│   ├── preprocess.py           # Raw UAV123 → manifest/cache/splits
+│   ├── competition_data.py     # Competition manifest + annotation loading
+│   ├── competition_siamese_dataset.py  # Template/search pair sampling
+│   ├── competition_submission.py       # Submission CSV I/O
+│   ├── competition_video.py    # Video frame iteration helpers
+│   ├── crop_utils.py           # Shared crop/projection utilities
 │   └── input/                  # Sample input videos
 │
 ├── evaluation/                 # Evaluation utilities
@@ -225,7 +228,6 @@ If you prefer pip or already have dependencies installed globally:
 
 ```bash
 pip install -r requirements.txt
-python data/preprocess.py --dataset-root <path-to-dataset> --output-dir data/processed
 python train/run.py --config config.yaml
 python -m app.main
 ```
@@ -234,15 +236,13 @@ python -m app.main
 
 ## Usage
 
-### Preprocess Dataset
+### Prepare Dataset
 
-```bash
-# Using uv
-uv run preprocess --dataset-root <path-to-dataset> --output-dir data/processed
+Point `train.dataset_root` at the competition raw-data directory containing:
 
-# Using python directly
-python data/preprocess.py --dataset-root <path-to-dataset> --output-dir data/processed
-```
+- `metadata/contestant_manifest.json`
+- sequence videos referenced by the manifest
+- annotation files referenced by the manifest
 
 ### Run Training
 
@@ -257,7 +257,6 @@ python train/run.py --config config.yaml
 Options:
 
 * `--config <path>` — path to YAML config (default: `config.yaml`)
-* `--resume <path>` — resume from a checkpoint (e.g. `checkpoints/epoch_005.pth`)
 
 ### Run the Desktop GUI
 
@@ -280,9 +279,9 @@ Settings are split by ownership:
 | Config file | Section | Key Settings |
 |-------------|---------|-------------|
 | `config.yaml` | `model` | backbone variant, feature channels, template/search size, pretrained flag |
-| `config.yaml` | `train` | dataset paths, batch size, learning rate, epochs, loss weights, backbone freeze |
+| `config.yaml` | `train` | dataset root, batch size, epochs, learning rate, workers, per-epoch pair sampling, jitter |
 | `config.yaml` | `infer` | checkpoint path, video path, confidence threshold, device |
-| `config.yaml` | `tracking` | backend, `track_max_width`, thresholds, trail length |
+| `config.yaml` | `tracking` | backend, checkpoint, thresholds, crop scales, `track_max_width`, trail length |
 | `app/app_config.yaml` | `tracking` | app override layer for the GUI-specific tracker behavior |
 | `app/app_config.yaml` | `video` | `target_fps` |
 | `app/app_config.yaml` | `overlay` | show confidence, show trail |
