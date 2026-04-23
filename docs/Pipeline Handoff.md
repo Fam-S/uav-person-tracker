@@ -17,6 +17,7 @@ SiamAPN-style siamese tracker with Apple's MobileOne-S2 backbone. Trains on comp
 4. Install uv and dependencies:
    ```bash
    !curl -LsSf https://astral.sh/uv/install.sh | sh
+   %env UV_LINK_MODE=copy
    !uv sync
    ```
 5. Download MobileOne-S2 pretrained weights:
@@ -24,18 +25,37 @@ SiamAPN-style siamese tracker with Apple's MobileOne-S2 backbone. Trains on comp
    !mkdir -p checkpoints
    !curl -L -o checkpoints/mobileone_s2_unfused.pth.tar https://docs-assets.developer.apple.com/ml-research/datasets/mobileone/mobileone_s2_unfused.pth.tar
    ```
-6. Update `config.yaml` with the config CLI before training:
+6. Choose one config workflow before training:
+
+   **Option A — persistent changes with the config CLI**
    ```bash
    !uv run project-config set train.dataset_root /kaggle/input/competition-name
    !uv run project-config set train.epochs 20
    !uv run project-config set train.batch_size 16
    ```
+
+   **Option B — temporary run-only overrides**
+   ```bash
+   !uv run train --config config.yaml \
+     --override train.dataset_root=/kaggle/input/competition-name \
+     --override train.epochs=20 \
+     --override train.batch_size=16
+   ```
+
+   - `project-config set` writes the new values into `config.yaml`.
+   - `--override KEY=VALUE` changes only the resolved config for that run and does **not** modify `config.yaml` on disk.
 7. For submission output, update `--output` to write to `/kaggle/working/` so you can download it.
 
 ## Train
 
 ```bash
 uv run train --config config.yaml
+```
+
+Or keep `config.yaml` unchanged and override specific values just for one run:
+
+```bash
+uv run train --config config.yaml --override train.epochs=5 --override train.device=cpu
 ```
 
 - Reads 255 train sequences from `data/raw/`

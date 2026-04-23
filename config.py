@@ -229,6 +229,20 @@ def validate_raw_config(raw: dict, config_path: str | Path | None = None) -> Pro
     return build_config(deepcopy(raw), config_path)
 
 
-def load_config(config_path=None):
+def apply_overrides(raw: dict, overrides: list[str] | None) -> dict:
+    updated = deepcopy(raw)
+    for override in overrides or []:
+        if "=" not in override:
+            raise ValueError(f"Override must use KEY=VALUE format: {override}")
+        key, value = override.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"Override key cannot be empty: {override}")
+        set_config_value(updated, key, _parse_value(value.strip()))
+    return updated
+
+
+def load_config(config_path=None, overrides: list[str] | None = None):
     raw, path = load_raw_config(config_path)
+    raw = apply_overrides(raw, overrides)
     return build_config(raw, path)

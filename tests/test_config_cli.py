@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from config import get_config_value, list_config_keys, load_config, load_raw_config, set_config_value
+from config import apply_overrides, get_config_value, list_config_keys, load_config, load_raw_config, set_config_value
 from train import config_cli
 
 
@@ -107,3 +107,26 @@ def test_config_cli_list_keys_prints_dotted_keys(tmp_path: Path, monkeypatch: py
     captured = capsys.readouterr()
     assert "train.epochs" in captured.out
     assert "tracking.backend" in captured.out
+
+
+def test_load_config_applies_overrides_without_writing_file(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path)
+
+    config = load_config(
+        config_path,
+        overrides=["train.epochs=5", "train.device=cuda", "model.pretrained=true"],
+    )
+    raw_after, _ = load_raw_config(config_path)
+
+    assert config.train.epochs == 5
+    assert config.train.device == "cuda"
+    assert config.model.pretrained is True
+    assert get_config_value(raw_after, "train.epochs") == 1
+    assert get_config_value(raw_after, "train.device") == "cpu"
+    assert get_config_value(raw_after, "model.pretrained") is False
+
+
+def test_apply_overrides_rejects_invalid_format() -> None:
+    with pytest.raises(ValueError, match="KEY=VALUE"):
+        apply_overrides({"train": {"epochs": 1}}, ["train.epochs"])

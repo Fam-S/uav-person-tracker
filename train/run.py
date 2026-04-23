@@ -156,11 +156,13 @@ class SiameseTrainer:
 
 def run_training(config: ProjectConfig) -> list[EpochStats]:
     # Build everything once, then reuse the same dataloader across epochs.
+    print("initializing trainer...", flush=True)
     trainer = SiameseTrainer(config)
+    print(f"device={trainer.device} building dataloader...", flush=True)
     dataloader = trainer.build_dataloader()
     history: list[EpochStats] = []
 
-    print(f"device={trainer.device} batches_per_epoch={len(dataloader)}")
+    print(f"device={trainer.device} batches_per_epoch={len(dataloader)}", flush=True)
     for epoch in range(1, config.train.epochs + 1):
         # One epoch means iterating through all sampled batches once.
         dataloader.dataset.set_epoch(epoch)
@@ -174,7 +176,8 @@ def run_training(config: ProjectConfig) -> list[EpochStats]:
         print(
             f"epoch={stats.epoch} batches={stats.num_batches} "
             f"loss={stats.mean_total_loss:.4f} "
-            f"reg={stats.mean_reg_loss:.4f}{tag}"
+            f"reg={stats.mean_reg_loss:.4f}{tag}",
+            flush=True,
         )
 
     return history
@@ -185,9 +188,10 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Train the minimal SiamAPN++ + MobileOne-S2 model.")
     parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--override", action="append", default=[], metavar="KEY=VALUE")
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    config = load_config(args.config, overrides=args.override)
     run_training(config)
 
 
