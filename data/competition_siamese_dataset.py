@@ -63,6 +63,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         self.translation_jitter = float(translation_jitter)
         self.scale_jitter = float(scale_jitter)
         self.seed = int(seed)
+        self._bad_video_paths: set[Path] = set()
 
         sequences = load_sequences(self.raw_root, "train")
         self.indexed_sequences = self._build_index(sequences)
@@ -90,7 +91,11 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         return np.random.default_rng(self.seed + int(index))
 
     def _sample_pair(self, rng: np.random.Generator) -> tuple[SequenceRecord, int, int]:
-        indexed_sequence = self.indexed_sequences[int(rng.integers(len(self.indexed_sequences)))]
+        available_sequences = [item for item in self.indexed_sequences if item.sequence.video_path not in self._bad_video_paths]
+        if not available_sequences:
+            raise RuntimeError("No readable training sequences remain after skipping bad videos.")
+
+        indexed_sequence = available_sequences[int(rng.integers(len(available_sequences)))]
         valid_indices = indexed_sequence.valid_indices
 
         template_pos = int(rng.integers(0, valid_indices.size - 1))
@@ -110,60 +115,79 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
 
     def __getitem__(self, index: int) -> dict[str, Tensor | str | int]:
         rng = self._rng_for_index(index)
-        sequence, template_index, search_index = self._sample_pair(rng)
+        max_attempts = max(8, len(self.indexed_sequences))
+        last_error: Exception | None = None
 
-        template_box = sequence.gt_boxes_xywh[template_index]
-        search_box = sequence.gt_boxes_xywh[search_index]
+        for _ in range(max_attempts):
+            sequence, template_index, search_index = self._sample_pair(rng)
 
-        template_frame = _load_frame(sequence.video_path, template_index)
-        search_frame = _load_frame(sequence.video_path, search_index)
+            template_box = sequence.gt_boxes_xywh[template_index]
+            search_box = sequence.gt_boxes_xywh[search_index]
 
-        search_center = xywh_to_center(search_box)[:2]
+            try:
+                template_frame = _load_frame(sequence.video_path, template_index)
+                search_frame = _load_frame(sequence.video_path, search_index)
+            except RuntimeError as exc:
+                # Some competition videos are unreadable/corrupt on disk; skip them
+                # for the rest of this worker instead of crashing the whole epoch.
+                self._bad_video_paths.add(sequence.video_path)
+                last_error = exc
+                continue
 
-        scale_factor = 1.0
-        if self.scale_jitter > 0:
-            scale_factor = 1.0 + rng.uniform(-self.scale_jitter, self.scale_jitter)
-            scale_factor = max(0.5, scale_factor)
+            try:
+                search_center = xywh_to_center(search_box)[:2]
 
-        template_patch = crop_and_resize(
-            template_frame,
-            template_box,
-            out_size=self.template_size,
-            context_amount=self.context_amount,
-            area_scale=1.0,
-        )
+                scale_factor = 1.0
+                if self.scale_jitter > 0:
+                    scale_factor = 1.0 + rng.uniform(-self.scale_jitter, self.scale_jitter)
+                    scale_factor = max(0.5, scale_factor)
 
-        tx_jitter, ty_jitter = 0.0, 0.0
-        if self.translation_jitter > 0:
-            tx_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
-            ty_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
-        jittered_center = (
-            search_center[0] + tx_jitter * search_box[2],
-            search_center[1] + ty_jitter * search_box[3],
-        )
+                template_patch = crop_and_resize(
+                    template_frame,
+                    template_box,
+                    out_size=self.template_size,
+                    context_amount=self.context_amount,
+                    area_scale=1.0,
+                )
 
-        search_patch = crop_and_resize(
-            search_frame,
-            template_box,
-            out_size=self.search_size,
-            context_amount=self.context_amount,
-            center_override=jittered_center,
-            area_scale=2.0 * scale_factor,
-        )
-        search_bbox_xywh = project_box_to_crop(
-            search_box_xywh=search_box,
-            reference_box_xywh=template_box,
-            out_size=self.search_size,
-            context_amount=self.context_amount,
-            center_override=jittered_center,
-            area_scale=2.0 * scale_factor,
-        )
+                tx_jitter, ty_jitter = 0.0, 0.0
+                if self.translation_jitter > 0:
+                    tx_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
+                    ty_jitter = rng.uniform(-self.translation_jitter, self.translation_jitter)
+                jittered_center = (
+                    search_center[0] + tx_jitter * search_box[2],
+                    search_center[1] + ty_jitter * search_box[3],
+                )
 
-        return {
-            "template": frame_to_tensor(template_patch),
-            "search": frame_to_tensor(search_patch),
-            "search_bbox_xywh": torch.from_numpy(search_bbox_xywh.copy()),
-            "seq_id": sequence.seq_id,
-            "template_index": template_index,
-            "search_index": search_index,
-        }
+                search_patch = crop_and_resize(
+                    search_frame,
+                    template_box,
+                    out_size=self.search_size,
+                    context_amount=self.context_amount,
+                    center_override=jittered_center,
+                    area_scale=2.0 * scale_factor,
+                )
+                search_bbox_xywh = project_box_to_crop(
+                    search_box_xywh=search_box,
+                    reference_box_xywh=template_box,
+                    out_size=self.search_size,
+                    context_amount=self.context_amount,
+                    center_override=jittered_center,
+                    area_scale=2.0 * scale_factor,
+                )
+            except ValueError as exc:
+                last_error = exc
+                continue
+
+            return {
+                "template": frame_to_tensor(template_patch),
+                "search": frame_to_tensor(search_patch),
+                "search_bbox_xywh": torch.from_numpy(search_bbox_xywh.copy()),
+                "seq_id": sequence.seq_id,
+                "template_index": template_index,
+                "search_index": search_index,
+            }
+
+        if last_error is not None:
+            raise RuntimeError(f"Could not sample a valid training pair after {max_attempts} attempts.") from last_error
+        raise RuntimeError("Could not sample a valid training pair.")

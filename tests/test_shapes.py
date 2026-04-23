@@ -4,8 +4,10 @@ import json
 from pathlib import Path
 
 import cv2
+import numpy as np
 import torch
 
+import data.competition_siamese_dataset as competition_siamese_dataset
 from data import CompetitionSiameseDataset
 
 
@@ -80,3 +82,76 @@ def test_dataset_sample_contract(tmp_path: Path):
     assert sample["search_bbox_xywh"].shape == (4,)
     assert torch.isfinite(sample["search_bbox_xywh"]).all()
     assert torch.all(sample["search_bbox_xywh"] >= 0.0)
+
+
+def test_dataset_skips_unreadable_video_and_resamples(tmp_path: Path, monkeypatch):
+    raw_root = tmp_path / "raw"
+    metadata_dir = raw_root / "metadata"
+    metadata_dir.mkdir(parents=True)
+
+    seq1_dir = raw_root / "dataset1" / "broken"
+    seq1_dir.mkdir(parents=True)
+    broken_video_path = seq1_dir / "broken.mp4"
+    _write_video(broken_video_path)
+    (seq1_dir / "annotation.txt").write_text("10,12,20,24\n12,14,20,24\n14,16,20,24\n", encoding="utf-8")
+
+    seq2_dir = raw_root / "dataset1" / "good"
+    seq2_dir.mkdir(parents=True)
+    good_video_path = seq2_dir / "good.mp4"
+    _write_video(good_video_path)
+    (seq2_dir / "annotation.txt").write_text("10,12,20,24\n12,14,20,24\n14,16,20,24\n", encoding="utf-8")
+
+    manifest = {
+        "train": {
+            "dataset1/broken": {
+                "dataset": "dataset1",
+                "seq_name": "broken",
+                "video_path": "dataset1/broken/broken.mp4",
+                "annotation_path": "dataset1/broken/annotation.txt",
+                "n_frames": 3,
+                "native_fps": 10,
+            },
+            "dataset1/good": {
+                "dataset": "dataset1",
+                "seq_name": "good",
+                "video_path": "dataset1/good/good.mp4",
+                "annotation_path": "dataset1/good/annotation.txt",
+                "n_frames": 3,
+                "native_fps": 10,
+            },
+        },
+        "public_lb": {},
+    }
+    (metadata_dir / "contestant_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    real_load_frame = competition_siamese_dataset._load_frame
+
+    def fake_load_frame(video_path: Path, frame_index: int) -> np.ndarray:
+        if video_path == broken_video_path:
+            raise RuntimeError(f"Could not open video: {video_path}")
+        return real_load_frame(video_path, frame_index)
+
+    monkeypatch.setattr(competition_siamese_dataset, "_load_frame", fake_load_frame)
+
+    dataset = CompetitionSiameseDataset(
+        raw_root=raw_root,
+        template_size=127,
+        search_size=255,
+        samples_per_epoch=1,
+        seed=0,
+    )
+
+    broken_sequence = dataset.indexed_sequences[0].sequence
+    good_sequence = dataset.indexed_sequences[1].sequence
+    sampled_pairs = iter([(broken_sequence, 0, 1), (good_sequence, 0, 1)])
+
+    def fake_sample_pair(rng):
+        _ = rng
+        return next(sampled_pairs)
+
+    monkeypatch.setattr(dataset, "_sample_pair", fake_sample_pair)
+
+    sample = dataset[0]
+
+    assert sample["seq_id"] == "dataset1/good"
+    assert broken_video_path in dataset._bad_video_paths

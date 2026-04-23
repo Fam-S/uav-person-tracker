@@ -6,7 +6,6 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from config import ProjectConfig, load_config
 from data import CompetitionSiameseDataset
@@ -80,8 +79,7 @@ class SiameseTrainer:
         reg_loss_sum = 0.0
         num_batches = 0
 
-        progress = tqdm(dataloader, desc=f"epoch {epoch}", unit="batch")
-        for batch in progress:
+        for batch in dataloader:
             # Move one batch of tensors from CPU memory into the training device.
             template = batch["template"].to(self.device)
             search = batch["search"].to(self.device)
@@ -96,14 +94,10 @@ class SiameseTrainer:
             loss_out.total_loss.backward()
             self.optimizer.step()
 
-            # Keep running averages so the progress bar shows how the epoch is going.
+            # Keep running averages so we can report clean epoch-level averages at the end.
             total_loss_sum += float(loss_out.total_loss.detach().cpu())
             reg_loss_sum += float(loss_out.reg_loss.detach().cpu())
             num_batches += 1
-            progress.set_postfix(
-                loss=f"{total_loss_sum / num_batches:.4f}",
-                reg=f"{reg_loss_sum / num_batches:.4f}",
-            )
 
         if num_batches == 0:
             raise ValueError("Training dataloader produced zero batches.")
