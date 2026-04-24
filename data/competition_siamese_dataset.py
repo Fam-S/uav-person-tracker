@@ -10,11 +10,22 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
+from decord import logging as decord_logging
+
 from data.competition_data import SequenceRecord, load_sequences
-from data.crop_utils import crop_and_resize, frame_to_tensor, project_box_to_crop, xywh_to_center
+from data.adapn_targets import AnchorTarget
+from data.crop_utils import (
+    crop_and_resize,
+    frame_to_tensor,
+    project_box_to_crop,
+    xywh_to_center,
+)
 
 if TYPE_CHECKING:
     from decord import VideoReader
+
+
+decord_logging.set_level(decord_logging.QUIET)
 
 
 def _is_present(box_xywh: np.ndarray) -> bool:
@@ -35,6 +46,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         raw_root: str | Path,
         template_size: int = 127,
         search_size: int = 255,
+        output_size: int = 21,
         context_amount: float = 0.5,
         samples_per_epoch: int = 512,
         frame_range: int = 100,
@@ -46,14 +58,17 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         self.raw_root = Path(raw_root)
         self.template_size = int(template_size)
         self.search_size = int(search_size)
+        self.output_size = int(output_size)
         self.context_amount = float(context_amount)
+        self.search_area_scale = float(self.search_size) / float(self.template_size)
         self.samples_per_epoch = int(samples_per_epoch)
         self.frame_range = int(frame_range)
         self.translation_jitter = float(translation_jitter)
         self.scale_jitter = float(scale_jitter)
         self.seed = int(seed)
         self.epoch = 0
-        self._bad_video_paths: set[Path] = set()
+        self.anchor_target = AnchorTarget(search_size=self.search_size, stride=8)
+        self._bad_video_paths: set[Path] = self._load_known_bad_video_paths()
         # Keep only a tiny number of live decoders per worker. Random video sampling
         # plus DataLoader prefetch can otherwise accumulate many open readers and
         # trigger the OOM killer on constrained environments like Kaggle.
@@ -64,6 +79,22 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         self.indexed_sequences = self._build_index(sequences)
         if not self.indexed_sequences:
             raise ValueError("No train sequences contain at least two visible target frames.")
+
+    def _load_known_bad_video_paths(self) -> set[Path]:
+        bad_list_path = self.raw_root / "metadata" / "bad_videos.txt"
+        if not bad_list_path.exists():
+            return set()
+
+        bad_paths: set[Path] = set()
+        for raw_line in bad_list_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            path = Path(line)
+            if not path.is_absolute():
+                path = self.raw_root / path
+            bad_paths.add(path)
+        return bad_paths
 
     @staticmethod
     def _build_index(sequences: list[SequenceRecord]) -> list[SequenceIndex]:
@@ -98,6 +129,9 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
     def _get_reader(self, video_path: Path) -> VideoReader:
         from decord import VideoReader, cpu
 
+        if video_path in self._bad_video_paths:
+            raise RuntimeError(f"Video is marked unreadable: {video_path}")
+
         reader = self._readers.get(video_path)
         if reader is None:
             try:
@@ -114,6 +148,10 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
 
     def _release_reader(self, video_path: Path) -> None:
         self._readers.pop(video_path, None)
+
+    def _mark_bad_video(self, video_path: Path) -> None:
+        self._bad_video_paths.add(video_path)
+        self._release_reader(video_path)
 
     def _load_frame(self, video_path: Path, frame_index: int) -> np.ndarray:
         reader = self._get_reader(video_path)
@@ -177,10 +215,9 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
                     search_index,
                 )
             except RuntimeError as exc:
-                # Some competition videos are unreadable/corrupt on disk; skip them
-                # for the rest of this worker instead of crashing the whole epoch.
-                self._bad_video_paths.add(sequence.video_path)
-                self._release_reader(sequence.video_path)
+                # Some competition videos are unreadable/corrupt on disk; resample
+                # instead of crashing the whole epoch.
+                self._mark_bad_video(sequence.video_path)
                 last_error = exc
                 continue
 
@@ -215,7 +252,7 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
                     out_size=self.search_size,
                     context_amount=self.context_amount,
                     center_override=jittered_center,
-                    area_scale=2.0 * scale_factor,
+                    area_scale=self.search_area_scale * scale_factor,
                 )
                 search_bbox_xywh = project_box_to_crop(
                     search_box_xywh=search_box,
@@ -223,8 +260,11 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
                     out_size=self.search_size,
                     context_amount=self.context_amount,
                     center_override=jittered_center,
-                    area_scale=2.0 * scale_factor,
+                    area_scale=self.search_area_scale * scale_factor,
                 )
+                x, y, w, h = [float(v) for v in search_bbox_xywh]
+                bbox = np.asarray([x, y, x + w, y + h], dtype=np.float32)
+                labelcls2, labelxff, _, labelcls3, weightxff = self.anchor_target.get(bbox, self.output_size)
             except ValueError as exc:
                 last_error = exc
                 continue
@@ -232,7 +272,11 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
             return {
                 "template": frame_to_tensor(template_patch),
                 "search": frame_to_tensor(search_patch),
-                "search_bbox_xywh": torch.from_numpy(search_bbox_xywh.copy()),
+                "bbox": torch.from_numpy(bbox.copy()),
+                "label_cls2": torch.from_numpy(labelcls2.copy()),
+                "labelxff": torch.from_numpy(labelxff.copy()),
+                "labelcls3": torch.from_numpy(labelcls3.copy()),
+                "weightxff": torch.from_numpy(weightxff.copy()),
                 "seq_id": sequence.seq_id,
                 "template_index": template_index,
                 "search_index": search_index,

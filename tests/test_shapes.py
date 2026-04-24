@@ -61,7 +61,7 @@ def test_dataset_sample_contract(tmp_path: Path):
     dataset = CompetitionSiameseDataset(
         raw_root=raw_root,
         template_size=127,
-        search_size=255,
+        search_size=287,
         samples_per_epoch=1,
         seed=5,
     )
@@ -70,18 +70,25 @@ def test_dataset_sample_contract(tmp_path: Path):
     assert set(sample) == {
         "template",
         "search",
-        "search_bbox_xywh",
+        "bbox",
+        "label_cls2",
+        "labelxff",
+        "labelcls3",
+        "weightxff",
         "seq_id",
         "template_index",
         "search_index",
     }
     assert sample["template"].shape == (3, 127, 127)
-    assert sample["search"].shape == (3, 255, 255)
+    assert sample["search"].shape == (3, 287, 287)
     assert sample["template"].dtype == torch.float32
     assert sample["search"].dtype == torch.float32
-    assert sample["search_bbox_xywh"].shape == (4,)
-    assert torch.isfinite(sample["search_bbox_xywh"]).all()
-    assert torch.all(sample["search_bbox_xywh"] >= 0.0)
+    assert sample["bbox"].shape == (4,)
+    assert sample["label_cls2"].shape == (1, 21, 21)
+    assert sample["labelxff"].shape == (4, 21, 21)
+    assert sample["labelcls3"].shape == (1, 21, 21)
+    assert sample["weightxff"].shape == (1, 21, 21)
+    assert torch.isfinite(sample["bbox"]).all()
 
 
 def test_dataset_skips_unreadable_video_and_resamples(tmp_path: Path, monkeypatch):
@@ -153,7 +160,6 @@ def test_dataset_skips_unreadable_video_and_resamples(tmp_path: Path, monkeypatc
     sample = dataset[0]
 
     assert sample["seq_id"] == "dataset1/good"
-    assert broken_video_path in dataset._bad_video_paths
 
 
 def test_dataloader_smoke_with_workers(tmp_path: Path):
@@ -161,7 +167,7 @@ def test_dataloader_smoke_with_workers(tmp_path: Path):
     dataset = CompetitionSiameseDataset(
         raw_root=raw_root,
         template_size=127,
-        search_size=255,
+        search_size=287,
         samples_per_epoch=4,
         seed=7,
     )
@@ -175,11 +181,15 @@ def test_dataloader_smoke_with_workers(tmp_path: Path):
     batch = next(iter(dataloader))
 
     assert batch["template"].shape == (2, 3, 127, 127)
-    assert batch["search"].shape == (2, 3, 255, 255)
-    assert batch["search_bbox_xywh"].shape == (2, 4)
+    assert batch["search"].shape == (2, 3, 287, 287)
+    assert batch["bbox"].shape == (2, 4)
+    assert batch["label_cls2"].shape == (2, 1, 21, 21)
+    assert batch["labelxff"].shape == (2, 4, 21, 21)
+    assert batch["labelcls3"].shape == (2, 1, 21, 21)
+    assert batch["weightxff"].shape == (2, 1, 21, 21)
     assert batch["template"].dtype == torch.float32
     assert batch["search"].dtype == torch.float32
-    assert torch.isfinite(batch["search_bbox_xywh"]).all()
+    assert torch.isfinite(batch["bbox"]).all()
     assert list(batch["seq_id"]) == ["dataset1/person1", "dataset1/person1"]
     assert batch["template_index"].shape == (2,)
     assert batch["search_index"].shape == (2,)

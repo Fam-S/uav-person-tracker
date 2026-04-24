@@ -106,9 +106,10 @@ def main():
     parser.add_argument("--raw-root", default="data/raw")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--output", default="evaluation/submissions/public_lb_submission.csv")
+    parser.add_argument("--override", action="append", default=[], metavar="KEY=VALUE")
     args = parser.parse_args()
 
-    project_config = load_config(args.config)
+    project_config = load_config(args.config, overrides=args.override)
 
     # Load only the sequences that belong to the public leaderboard split.
     sequences = load_sequences(args.raw_root, "public_lb")

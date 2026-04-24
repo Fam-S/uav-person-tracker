@@ -11,8 +11,8 @@ video:
 
 # These values override the shared tracking defaults from `config.yaml` for the GUI.
 tracking:
-  backend: csrt
-  checkpoint: null
+  backend: siamapn
+  checkpoint: checkpoints/best.pth
   uncertain_confidence_threshold: 0.55
   lost_confidence_threshold: 0.35
   trail_length: 20

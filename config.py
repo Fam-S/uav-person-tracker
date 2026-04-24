@@ -14,7 +14,9 @@ class ModelSettings:
     pretrained_path: str | None = None
     normalize_input: bool = True
     template_size: int = 127
-    search_size: int = 255
+    search_size: int = 287
+    output_size: int = 21
+    anchor_stride: int = 8
     context_amount: float = 0.5
 
 
@@ -23,6 +25,7 @@ class TrainSettings:
     dataset_root: str = "data/raw"
     batch_size: int = 8
     epochs: int = 20
+    resume_checkpoint: str | None = None
     learning_rate: float = 0.0001
     weight_decay: float = 0.0001
     device: str = "cuda"

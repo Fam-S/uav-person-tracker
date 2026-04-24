@@ -130,9 +130,10 @@ def main():
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--limit", type=int, default=4)
     parser.add_argument("--widths", nargs="+", type=int, default=[640, 512, 480, 384, 320])
+    parser.add_argument("--override", action="append", default=[], metavar="KEY=VALUE")
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    config = load_config(args.config, overrides=args.override)
     train_sequences = load_sequences(args.raw_root, "train")
     picked = pick_sequences(train_sequences, args.limit)
 

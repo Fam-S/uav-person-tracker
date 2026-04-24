@@ -37,11 +37,13 @@ torchvision = { index = "pytorch-cu126" }
 torchaudio = { index = "pytorch-cu126" }
 
 [tool.hatch.build.targets.wheel]
-packages = ["models", "data", "train", "app"]
+packages = ["models", "data", "train", "app", "evaluation"]
 
 [project.scripts]
 train = "train.run:main"
 project-config = "train.config_cli:main"
+eval-public = "evaluation.basic_eval:main"
+eval-train = "evaluation.benchmark_backend:main"
 
 [dependency-groups]
 ui = [

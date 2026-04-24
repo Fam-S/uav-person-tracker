@@ -7,7 +7,7 @@ import cv2
 import torch
 
 from config import load_config
-from train.run import SiameseTrainer
+from train.run import SiameseTrainer, run_training
 
 
 def _write_video(video_path: Path, num_frames: int = 3) -> None:
@@ -25,7 +25,7 @@ def _write_video(video_path: Path, num_frames: int = 3) -> None:
     writer.release()
 
 
-def _make_training_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _make_training_fixture(tmp_path: Path, epochs: int = 1) -> tuple[Path, Path]:
     raw_root = tmp_path / "raw"
     sequence_dir = raw_root / "dataset1" / "person1"
     metadata_dir = raw_root / "metadata"
@@ -69,7 +69,7 @@ def _make_training_fixture(tmp_path: Path) -> tuple[Path, Path]:
                 "train:",
                 f"  dataset_root: {raw_root.as_posix()}",
                 "  batch_size: 1",
-                "  epochs: 1",
+                f"  epochs: {epochs}",
                 "  learning_rate: 0.0001",
                 "  weight_decay: 0.0",
                 "  device: cpu",
@@ -96,3 +96,34 @@ def test_one_epoch_smoke(tmp_path: Path):
     assert stats.num_batches == 1
     assert torch.isfinite(torch.tensor(stats.mean_total_loss))
     assert checkpoint_path.exists()
+
+
+def test_resume_training_continues_from_checkpoint(tmp_path: Path):
+    _, config_path = _make_training_fixture(tmp_path)
+
+    first_config = load_config(config_path)
+    first_trainer = SiameseTrainer(first_config)
+    first_dataloader = first_trainer.build_dataloader()
+    first_stats = first_trainer.train_epoch(first_dataloader, epoch=1)
+    resume_checkpoint = first_trainer.save_checkpoint(1, first_stats, is_best=True)
+
+    resumed_config = load_config(config_path, overrides=["train.epochs=1"])
+    history = run_training(resumed_config, resume_checkpoint=resume_checkpoint)
+
+    assert len(history) == 1
+    assert history[0].epoch == 2
+    assert (tmp_path / "checkpoints" / "epoch_002.pth").exists()
+
+
+def test_resume_training_without_path_uses_latest_epoch(tmp_path: Path):
+    _, config_path = _make_training_fixture(tmp_path, epochs=2)
+
+    base_config = load_config(config_path)
+    run_training(base_config)
+
+    resumed_config = load_config(config_path, overrides=["train.epochs=1"])
+    history = run_training(resumed_config, resume_checkpoint="")
+
+    assert len(history) == 1
+    assert history[0].epoch == 3
+    assert (tmp_path / "checkpoints" / "epoch_003.pth").exists()

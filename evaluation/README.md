@@ -4,7 +4,7 @@
 
 This directory contains simple evaluation and submission utilities.
 
-Right now the main tool is:
+Right now the main tools are:
 
 - `basic_eval.py` - runs the configured tracker backend over the competition `public_lb` split and writes a Kaggle submission CSV
 - `benchmark_backend.py` - benchmarks the configured backend on labeled training videos at multiple `track_max_width` values
@@ -46,13 +46,19 @@ tracking:
 Then run:
 
 ```bash
-uv run python -m evaluation.basic_eval
+uv run eval-public
 ```
 
 Or with explicit paths:
 
 ```bash
-uv run python -m evaluation.basic_eval --raw-root data/raw --config config.yaml --output submissions/public_lb_submission.csv
+uv run eval-public --raw-root data/raw --config config.yaml --output evaluation/submissions/public_lb_submission.csv
+```
+
+You can override config values the same way as training:
+
+```bash
+uv run eval-public --override tracking.backend=siamapn --override tracking.checkpoint=checkpoints/best.pth
 ```
 
 ## Output
@@ -60,7 +66,7 @@ uv run python -m evaluation.basic_eval --raw-root data/raw --config config.yaml 
 Default output:
 
 ```text
-submissions/public_lb_submission.csv
+evaluation/submissions/public_lb_submission.csv
 ```
 
 The output CSV matches the id order from:
@@ -73,11 +79,19 @@ That means it is ready to submit to the Kaggle competition baseline as long as t
 
 ## Benchmarking
 
-If you want to compare speed and tracking quality at different `track_max_width` values, run:
+If you want to benchmark the configured backend on labeled training videos, run:
 
 ```bash
-uv run python -m evaluation.benchmark_backend --limit 4
+uv run eval-train --limit 4
 ```
+
+For the trained SiamAPN backend:
+
+```bash
+uv run eval-train --limit 4 --override tracking.backend=siamapn --override tracking.checkpoint=checkpoints/best.pth
+```
+
+`--widths` is mainly useful for backends that use `tracking.track_max_width`, such as CSRT. The SiamAPN++ backend crops around the target and resizes to its fixed model search size, so changing `--widths` is not expected to affect SiamAPN++ model input size unless explicit frame scaling is added later.
 
 This uses the backend already selected in `config.yaml` and reports:
 

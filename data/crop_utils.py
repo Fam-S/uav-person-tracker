@@ -116,6 +116,28 @@ def project_box_to_crop(
     return projected
 
 
+def project_box_to_crop_center_norm(
+    search_box_xywh: np.ndarray | tuple[float, float, float, float],
+    reference_box_xywh: np.ndarray | tuple[float, float, float, float],
+    out_size: int,
+    context_amount: float,
+    center_override: tuple[float, float] | None = None,
+    area_scale: float = 1.0,
+) -> np.ndarray:
+    crop_box = project_box_to_crop(
+        search_box_xywh=search_box_xywh,
+        reference_box_xywh=reference_box_xywh,
+        out_size=out_size,
+        context_amount=context_amount,
+        center_override=center_override,
+        area_scale=area_scale,
+    )
+    x, y, w, h = [float(v) for v in crop_box]
+    center_x = x + (w / 2.0)
+    center_y = y + (h / 2.0)
+    return np.asarray([center_x, center_y, w, h], dtype=np.float32) / float(out_size)
+
+
 def project_box_from_crop(
     crop_box_xywh: np.ndarray | tuple[float, float, float, float],
     reference_box_xywh: np.ndarray | tuple[float, float, float, float],
@@ -148,6 +170,36 @@ def project_box_from_crop(
         frame_h = max(1.0, min(frame_h, image_h - frame_y))
 
     return int(round(frame_x)), int(round(frame_y)), int(round(frame_w)), int(round(frame_h))
+
+
+def project_box_from_crop_center_norm(
+    crop_box_cxcywh: np.ndarray | tuple[float, float, float, float],
+    reference_box_xywh: np.ndarray | tuple[float, float, float, float],
+    out_size: int,
+    context_amount: float,
+    center_override: tuple[float, float] | None = None,
+    area_scale: float = 1.0,
+    frame_shape: tuple[int, int] | None = None,
+) -> tuple[int, int, int, int]:
+    cx, cy, w, h = [float(v) for v in crop_box_cxcywh]
+    crop_box_xywh = np.asarray(
+        [
+            (cx * out_size) - ((w * out_size) / 2.0),
+            (cy * out_size) - ((h * out_size) / 2.0),
+            w * out_size,
+            h * out_size,
+        ],
+        dtype=np.float32,
+    )
+    return project_box_from_crop(
+        crop_box_xywh=crop_box_xywh,
+        reference_box_xywh=reference_box_xywh,
+        out_size=out_size,
+        context_amount=context_amount,
+        center_override=center_override,
+        area_scale=area_scale,
+        frame_shape=frame_shape,
+    )
 
 
 def frame_to_tensor(frame_bgr: np.ndarray) -> Tensor:
