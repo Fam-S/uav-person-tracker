@@ -221,7 +221,7 @@ class SiamAPNBackend(BaseBackend):
         self.model.load_state_dict(ckpt["model_state_dict"])
         self.model.eval()
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def initialize(self, frame: np.ndarray, bbox: BBox) -> None:
         if self.model is None:
             raise RuntimeError("Model not loaded. Call load() first.")
@@ -236,15 +236,14 @@ class SiamAPNBackend(BaseBackend):
         )
         template_tensor = frame_to_tensor(template_crop).unsqueeze(0).to(self.device)
 
-        with torch.no_grad():
-            self.model.template(template_tensor)
+        self.model.template(template_tensor)
         self._last_bbox = bbox
         self.center_pos = np.asarray([bbox[0] + (bbox[2] - 1) / 2.0, bbox[1] + (bbox[3] - 1) / 2.0], dtype=np.float32)
         self.size = np.asarray([bbox[2], bbox[3]], dtype=np.float32)
         self.velocity = np.zeros(2, dtype=np.float32)
         self.initialized = True
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def track(self, frame: np.ndarray) -> TrackingResult:
         if not self.initialized or self.model is None or self._last_bbox is None or self.center_pos is None or self.size is None:
             return TrackingResult(None, 0.0, "Lost", 0.0)
@@ -262,21 +261,28 @@ class SiamAPNBackend(BaseBackend):
         )
         search_tensor = frame_to_tensor(search_crop).unsqueeze(0).to(self.device)
 
-        outputs = self.model.track(search_tensor)
-        anchors = self._generate_anchor()
-        score1 = self._convert_score(outputs["cls1"]) * self.score_weights[0]
-        score2 = self._convert_score(outputs["cls2"]) * self.score_weights[1]
-        score3 = outputs["cls3"].view(-1).detach().cpu().numpy() * self.score_weights[2]
+        raw_outputs = self.model.track(search_tensor)
+        cpu_outputs = self._extract_cpu_outputs(raw_outputs)
+        if "ranchors" in cpu_outputs:
+            anchors = self._generate_anchor_from_mapp(cpu_outputs["ranchors"])
+        else:
+            anchors = self._generate_anchor()
+        score1 = self._convert_score_cpu(cpu_outputs["cls1"]) * self.score_weights[0]
+        score2 = self._convert_score_cpu(cpu_outputs["cls2"]) * self.score_weights[1]
+        score3 = cpu_outputs["cls3"].flatten() * self.score_weights[2]
         score = (score1 + score2 + score3) / 3.0
-        pred_bbox = self._convert_bbox(outputs["loc"], anchors)
+        score = np.nan_to_num(score, nan=0.0, posinf=1.0, neginf=0.0)
+        pred_bbox = self._convert_bbox_cpu(cpu_outputs["loc"], anchors)
 
         s_z = compute_crop_size(self._last_bbox, context_amount=self.context_amount, area_scale=self.template_scale)
         scale_z = self.template_size / s_z
         s_c = self._change(self._sz(pred_bbox[2, :], pred_bbox[3, :]) / self._sz(self.size[0] * scale_z, self.size[1] * scale_z))
         r_c = self._change((self.size[0] / (self.size[1] + 1e-5)) / (pred_bbox[2, :] / (pred_bbox[3, :] + 1e-5)))
-        penalty = np.exp(-(r_c * s_c - 1) * self.penalty_k)
+        penalty_arg = np.clip(-(r_c * s_c - 1) * self.penalty_k, -50.0, 50.0)
+        penalty = np.nan_to_num(np.exp(penalty_arg), nan=0.0, posinf=0.0, neginf=0.0)
         pscore = penalty * score
         pscore = pscore * (1 - self.window_influence) + self.window * self.window_influence
+        pscore = np.nan_to_num(pscore, nan=0.0, posinf=0.0, neginf=0.0)
         best_idx = int(np.argmax(pscore))
         bbox = pred_bbox[:, best_idx] / scale_z
         lr = penalty[best_idx] * score[best_idx] * self.lr
@@ -311,6 +317,8 @@ class SiamAPNBackend(BaseBackend):
 
     @staticmethod
     def _sz(w: np.ndarray | float, h: np.ndarray | float) -> np.ndarray | float:
+        w = np.maximum(w, 1e-3)
+        h = np.maximum(h, 1e-3)
         pad = (w + h) * 0.5
         return np.sqrt((w + pad) * (h + pad))
 
@@ -322,36 +330,68 @@ class SiamAPNBackend(BaseBackend):
         height = max(10.0, min(float(height), float(boundary[0])))
         return cx, cy, width, height
 
-    def _generate_anchor(self) -> np.ndarray:
-        if self.model is None or self.model.ranchors is None:
-            raise RuntimeError("Model did not produce dynamic anchors.")
-        mapp = self.model.ranchors
+    def _extract_cpu_outputs(self, raw_outputs: dict[str, torch.Tensor]) -> dict[str, np.ndarray]:
+        keys = ("cls1", "cls2", "cls3", "loc")
+        cpu_outputs = {}
+        for key in keys:
+            cpu_outputs[key] = raw_outputs[key].detach().cpu().numpy()
+        ranchors = raw_outputs.get("ranchors")
+        if ranchors is not None:
+            cpu_outputs["ranchors"] = ranchors.detach().cpu().numpy()
+        return cpu_outputs
+
+    def _generate_anchor_from_mapp(self, mapp: np.ndarray) -> np.ndarray:
         size = self.output_size
         grid = np.linspace(0, size - 1, size)
         x = np.tile((self.anchor_stride * grid) - self.anchor_stride * (size - 1) / 2, size).reshape(-1)
         y = np.tile((self.anchor_stride * grid).reshape(-1, 1) - self.anchor_stride * (size - 1) / 2, size).reshape(-1)
-        shap = (mapp[0] * (self.search_size // 4)).detach().cpu().numpy()
+        shap = mapp[0] * (self.search_size // 4)
         xx = np.int16(np.tile(grid, size).reshape(-1))
         yy = np.int16(np.tile(grid.reshape(-1, 1), size).reshape(-1))
-        w = shap[0, yy, xx] + shap[1, yy, xx]
-        h = shap[2, yy, xx] + shap[3, yy, xx]
-        x = x - shap[0, yy, xx] + w / 2
-        y = y - shap[2, yy, xx] + h / 2
+        w = np.maximum(shap[0, yy, xx] + shap[1, yy, xx], 1e-3)
+        h = np.maximum(shap[2, yy, xx] + shap[3, yy, xx], 1e-3)
         anchor = np.zeros((size**2, 4), dtype=np.float32)
-        anchor[:, 0] = x
-        anchor[:, 1] = y
+        anchor[:, 0] = x - shap[0, yy, xx] + w / 2
+        anchor[:, 1] = y - shap[2, yy, xx] + h / 2
         anchor[:, 2] = w
         anchor[:, 3] = h
         return anchor
 
     @staticmethod
+    def _convert_score_cpu(score_np: np.ndarray) -> np.ndarray:
+        score_2d = score_np.reshape(2, -1).T
+        exp_s = np.exp(score_2d - score_2d.max(axis=1, keepdims=True))
+        prob = exp_s / exp_s.sum(axis=1, keepdims=True)
+        return prob[:, 1]
+
+    @staticmethod
+    def _convert_bbox_cpu(delta_np: np.ndarray, anchor: np.ndarray) -> np.ndarray:
+        delta = delta_np.reshape(4, -1)
+        anchor_w = np.maximum(anchor[:, 2], 1e-3)
+        anchor_h = np.maximum(anchor[:, 3], 1e-3)
+        out = np.empty_like(delta)
+        out[0, :] = delta[0, :] * anchor[:, 2] + anchor[:, 0]
+        out[1, :] = delta[1, :] * anchor[:, 3] + anchor[:, 1]
+        out[2, :] = np.exp(np.clip(delta[2, :], -10.0, 10.0)) * anchor_w
+        out[3, :] = np.exp(np.clip(delta[3, :], -10.0, 10.0)) * anchor_h
+        return np.nan_to_num(out, nan=0.0, posinf=1e6, neginf=-1e6)
+
+    def _generate_anchor(self) -> np.ndarray:
+        if self.model is None or self.model.ranchors is None:
+            raise RuntimeError("Model did not produce dynamic anchors.")
+        mapp = self.model.ranchors.detach().cpu().numpy()
+        return self._generate_anchor_from_mapp(mapp)
+
+    @staticmethod
     def _convert_bbox(delta: torch.Tensor, anchor: np.ndarray) -> np.ndarray:
         delta_np = delta.permute(1, 2, 3, 0).contiguous().view(4, -1).detach().cpu().numpy()
+        anchor_w = np.maximum(anchor[:, 2], 1e-3)
+        anchor_h = np.maximum(anchor[:, 3], 1e-3)
         delta_np[0, :] = delta_np[0, :] * anchor[:, 2] + anchor[:, 0]
         delta_np[1, :] = delta_np[1, :] * anchor[:, 3] + anchor[:, 1]
-        delta_np[2, :] = np.exp(delta_np[2, :]) * anchor[:, 2]
-        delta_np[3, :] = np.exp(delta_np[3, :]) * anchor[:, 3]
-        return delta_np
+        delta_np[2, :] = np.exp(np.clip(delta_np[2, :], -10.0, 10.0)) * anchor_w
+        delta_np[3, :] = np.exp(np.clip(delta_np[3, :], -10.0, 10.0)) * anchor_h
+        return np.nan_to_num(delta_np, nan=0.0, posinf=1e6, neginf=-1e6)
 
     @staticmethod
     def _convert_score(score: torch.Tensor) -> np.ndarray:
@@ -388,6 +428,11 @@ class SiamAPNBackend(BaseBackend):
 
     def reset(self) -> None:
         super().reset()
+        if self.model is not None:
+            if hasattr(self.model, "zf"):
+                self.model.zf = None
+            if hasattr(self.model, "ranchors"):
+                self.model.ranchors = None
         self._last_bbox = None
         self.center_pos = None
         self.size = None

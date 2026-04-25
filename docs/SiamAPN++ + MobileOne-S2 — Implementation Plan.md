@@ -246,19 +246,20 @@ The migration should avoid copying large unused upstream areas such as:
 - unused demo/test scripts
 - unused backbone or tracker variants
 
-After migration, rewrite imports so the code runs fully from this repository without depending on `external/SiamAPN`.
+The active port now runs from this repository without depending on `external/SiamAPN` at runtime. Source mapping and notices are preserved in `docs/references/siamapn_port_provenance.md` and `docs/references/third_party_notices.md`.
 
 ---
 
 ### Step 10 - Remove Temporary External Code
 
-After the migrated code is working from this repository:
+The migrated code is active in this repository:
 
-1. verify the local copied version is the one being imported
-2. confirm training/config paths no longer depend on `external/`
-3. delete the temporary `external/` implementation copies that are no longer needed
+1. runtime imports resolve to active `models/`, `data/`, `app/`, and `evaluation/` modules
+2. provenance and third-party notices are preserved under `docs/references/`
+3. parity/golden tests cover target generation, losses, tracker decode helpers, and MobileOne feature/reparameterization contracts
+4. the temporary `external/` reference copy can be deleted
 
-The goal is for `external/` to be only a temporary reference during integration, not part of the final project structure.
+The final project structure does not require `external/`.
 
 ---
 

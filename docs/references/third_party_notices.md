@@ -1,3 +1,41 @@
+# Third-Party Notices
+
+This file preserves license/notice information for third-party code copied or adapted into active repo modules before deleting `external/`.
+
+## SiamAPN++
+
+- Source: `https://github.com/vision4robotics/SiamAPN`
+- Source path used for the port: `SiamAPN++/`
+- License found in vendored reference before deletion: Apache License 2.0
+- License URL: `http://www.apache.org/licenses/LICENSE-2.0`
+
+Apache License 2.0 notice preserved from the vendored reference:
+
+```text
+Apache License
+Version 2.0, January 2004
+http://www.apache.org/licenses/
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+## Apple ML-MobileOne
+
+- Source: `https://github.com/apple/ml-mobileone`
+- Source path used for the active backbone implementation: `external/ml-mobileone/mobileone.py` before deletion
+- License/notice text preserved from the vendored reference:
+
+```text
 Copyright (C) 2022 Apple Inc. All Rights Reserved.
 
 IMPORTANT:  This Apple software is supplied to you by Apple
@@ -44,3 +82,6 @@ SOFTWARE DISTRIBUTED WITH ML-MobileOne:
 The ML-MobileOne software includes a number of subcomponents with separate
 copyright notices and license terms - please see the file ACKNOWLEDGEMENTS.
 -------------------------------------------------------------------------------
+```
+
+The vendored `external/ml-mobileone/` copy available at deletion time did not include an `ACKNOWLEDGEMENTS` file.

@@ -112,6 +112,15 @@ class SiameseTrainer:
             samples_per_epoch=self.config.train.train_samples_per_epoch,
             translation_jitter=self.config.train.translation_jitter,
             scale_jitter=self.config.train.scale_jitter,
+            color_jitter_prob=self.config.train.color_jitter_prob,
+            brightness_jitter=self.config.train.brightness_jitter,
+            contrast_jitter=self.config.train.contrast_jitter,
+            saturation_jitter=self.config.train.saturation_jitter,
+            grayscale_prob=self.config.train.grayscale_prob,
+            blur_prob=self.config.train.blur_prob,
+            noise_prob=self.config.train.noise_prob,
+            horizontal_flip_prob=self.config.train.horizontal_flip_prob,
+            template_trim_jitter=self.config.train.template_trim_jitter,
             seed=0,
         )
         dataloader_kwargs: dict[str, object] = {}

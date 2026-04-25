@@ -77,3 +77,48 @@ def test_siam_backend_smooths_large_prediction_jumps(monkeypatch):
     prev_center_x = 30 + 40 / 2.0
     new_center_x = result.bbox[0] + result.bbox[2] / 2.0
     assert abs(new_center_x - prev_center_x) <= 1.0
+
+
+def test_siam_backend_decode_helpers_match_original_tracker_math():
+    backend = SiamAPNBackend(TrackingSettings(backend="siamapn", checkpoint="dummy.pth"))
+    backend.model = _FakeModel()
+    backend.device = torch.device("cpu")
+
+    backend.model.ranchors = torch.zeros((1, 4, 21, 21), dtype=torch.float32)
+    backend.model.ranchors[:, 0, 10, 10] = 23 / (backend.search_size // 4)
+    backend.model.ranchors[:, 1, 10, 10] = 23 / (backend.search_size // 4)
+    backend.model.ranchors[:, 2, 10, 10] = 24 / (backend.search_size // 4)
+    backend.model.ranchors[:, 3, 10, 10] = 24 / (backend.search_size // 4)
+    anchors = backend._generate_anchor()
+    center_index = 10 * 21 + 10
+
+    assert np.allclose(anchors[center_index], np.array([0.0, 0.0, 46.0, 48.0], dtype=np.float32))
+
+    loc = torch.zeros((1, 4, 21, 21), dtype=torch.float32)
+    decoded = backend._convert_bbox(loc, anchors)
+    assert np.allclose(decoded[:, center_index], np.array([0.0, 0.0, 46.0, 48.0], dtype=np.float32))
+
+    cls = torch.zeros((1, 2, 21, 21), dtype=torch.float32)
+    cls[:, 1, 10, 10] = 2.0
+    scores = backend._convert_score(cls)
+    assert np.isclose(scores[center_index], float(torch.softmax(torch.tensor([0.0, 2.0]), dim=0)[1]))
+
+
+def test_siam_backend_clamps_invalid_untrained_shapes():
+    backend = SiamAPNBackend(TrackingSettings(backend="siamapn", checkpoint="dummy.pth"))
+    backend.model = _FakeModel()
+
+    backend.model.ranchors = torch.full((1, 4, 21, 21), -0.2, dtype=torch.float32)
+    anchors = backend._generate_anchor()
+    assert np.isfinite(anchors).all()
+    assert np.all(anchors[:, 2] > 0)
+    assert np.all(anchors[:, 3] > 0)
+
+    loc = torch.full((1, 4, 21, 21), 100.0, dtype=torch.float32)
+    decoded = backend._convert_bbox(loc, anchors)
+    assert np.isfinite(decoded).all()
+    assert np.all(decoded[2, :] > 0)
+    assert np.all(decoded[3, :] > 0)
+
+    size = backend._sz(decoded[2, :], decoded[3, :])
+    assert np.isfinite(size).all()

@@ -18,6 +18,24 @@ def test_mobileone_backbone_outputs_two_feature_levels():
     assert high_level.shape == (BATCH, 256, 26, 26)
 
 
+def test_mobileone_template_shapes_and_reparameterize_preserves_contract():
+    backbone = MobileOneS2Backbone(pretrained_path=None, normalize_input=True).to(DEVICE)
+    backbone.eval()
+    template = torch.rand(1, 3, 127, 127, device=DEVICE)
+
+    with torch.no_grad():
+        low_level, high_level = backbone(template)
+    assert low_level.shape == (1, 384, 8, 8)
+    assert high_level.shape == (1, 256, 6, 6)
+
+    backbone.reparameterize()
+    backbone.eval()
+    with torch.no_grad():
+        low_level, high_level = backbone(template)
+    assert low_level.shape == (1, 384, 8, 8)
+    assert high_level.shape == (1, 256, 6, 6)
+
+
 def test_siamapn_forward_shapes():
     model = SiamAPNppMobileOne(feature_channels=96, pretrained_path=None).to(DEVICE)
     template = torch.rand(BATCH, 3, 127, 127, device=DEVICE)

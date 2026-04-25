@@ -9,6 +9,8 @@ import torch
 from torch.utils.data import DataLoader
 
 from data import CompetitionSiameseDataset
+from data.competition_data import SequenceRecord
+from data.competition_video import read_sequence_frames
 
 
 def _write_video(video_path: Path, num_frames: int = 3) -> None:
@@ -89,6 +91,89 @@ def test_dataset_sample_contract(tmp_path: Path):
     assert sample["labelcls3"].shape == (1, 21, 21)
     assert sample["weightxff"].shape == (1, 21, 21)
     assert torch.isfinite(sample["bbox"]).all()
+
+
+def test_dataset_augmentations_preserve_contract(tmp_path: Path):
+    raw_root = _make_raw_root(tmp_path)
+    dataset = CompetitionSiameseDataset(
+        raw_root=raw_root,
+        template_size=127,
+        search_size=287,
+        samples_per_epoch=1,
+        seed=5,
+        color_jitter_prob=1.0,
+        brightness_jitter=0.2,
+        contrast_jitter=0.2,
+        saturation_jitter=0.2,
+        grayscale_prob=1.0,
+        blur_prob=1.0,
+        noise_prob=1.0,
+        horizontal_flip_prob=1.0,
+        template_trim_jitter=0.05,
+    )
+
+    sample = dataset[0]
+
+    assert sample["template"].shape == (3, 127, 127)
+    assert sample["search"].shape == (3, 287, 287)
+    assert sample["template"].dtype == torch.float32
+    assert sample["search"].dtype == torch.float32
+    assert float(sample["template"].min()) >= 0.0
+    assert float(sample["template"].max()) <= 1.0
+    assert float(sample["search"].min()) >= 0.0
+    assert float(sample["search"].max()) <= 1.0
+    assert torch.isfinite(sample["bbox"]).all()
+    assert sample["label_cls2"].shape == (1, 21, 21)
+    assert sample["labelxff"].shape == (4, 21, 21)
+
+
+def test_template_trim_jitter_resizes_back_to_template_shape(tmp_path: Path):
+    raw_root = _make_raw_root(tmp_path)
+    dataset = CompetitionSiameseDataset(
+        raw_root=raw_root,
+        template_size=127,
+        search_size=287,
+        samples_per_epoch=1,
+        template_trim_jitter=0.05,
+    )
+    patch = np.zeros((127, 127, 3), dtype=np.uint8)
+    patch[0, :, :] = 255
+    patch[-1, :, :] = 255
+    patch[:, 0, :] = 255
+    patch[:, -1, :] = 255
+
+    trimmed = dataset._trim_and_resize_template(patch, np.random.default_rng(0))
+
+    assert trimmed.shape == patch.shape
+    assert trimmed.dtype == patch.dtype
+    assert trimmed[0].max() < 255
+
+
+def test_horizontal_flip_updates_search_crop_bbox(tmp_path: Path):
+    raw_root = _make_raw_root(tmp_path)
+    dataset = CompetitionSiameseDataset(
+        raw_root=raw_root,
+        template_size=127,
+        search_size=287,
+        samples_per_epoch=1,
+        horizontal_flip_prob=1.0,
+    )
+    template_patch = np.zeros((127, 127, 3), dtype=np.uint8)
+    search_patch = np.zeros((287, 287, 3), dtype=np.uint8)
+    template_patch[:, :20] = 255
+    search_patch[:, :30] = 255
+    bbox = np.asarray([10.0, 20.0, 50.0, 80.0], dtype=np.float32)
+
+    flipped_template, flipped_search, flipped_bbox = dataset._maybe_flip_pair(
+        template_patch,
+        search_patch,
+        bbox,
+        np.random.default_rng(0),
+    )
+
+    assert np.allclose(flipped_bbox, np.asarray([237.0, 20.0, 277.0, 80.0], dtype=np.float32))
+    assert flipped_template[:, -20:].max() == 255
+    assert flipped_search[:, -30:].max() == 255
 
 
 def test_dataset_skips_unreadable_video_and_resamples(tmp_path: Path, monkeypatch):
@@ -193,3 +278,30 @@ def test_dataloader_smoke_with_workers(tmp_path: Path):
     assert list(batch["seq_id"]) == ["dataset1/person1", "dataset1/person1"]
     assert batch["template_index"].shape == (2,)
     assert batch["search_index"].shape == (2,)
+
+
+def test_eval_video_reader_yields_bgr_frames(tmp_path: Path):
+    video_path = tmp_path / "video.mp4"
+    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (32, 32))
+    assert writer.isOpened()
+    red_bgr = np.zeros((32, 32, 3), dtype=np.uint8)
+    red_bgr[:, :, 2] = 255
+    writer.write(red_bgr)
+    writer.release()
+
+    sequence = SequenceRecord(
+        seq_id="test/red",
+        split="public_lb",
+        dataset="test",
+        seq_name="red",
+        video_path=video_path,
+        n_frames=1,
+        native_fps=10,
+        init_box_xywh=np.asarray([0, 0, 10, 10], dtype=np.float32),
+        gt_boxes_xywh=None,
+    )
+
+    _, frame = next(read_sequence_frames(sequence))
+
+    assert frame.shape == (32, 32, 3)
+    assert frame[:, :, 2].mean() > frame[:, :, 0].mean()

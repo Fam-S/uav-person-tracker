@@ -21,6 +21,12 @@ from PySide6.QtWidgets import (
 )
 
 from app.config import AppConfig
+from data.crop_utils import compute_crop_size
+
+
+SIAMAPN_CONTEXT_AMOUNT = 0.5
+SIAMAPN_TEMPLATE_SIZE = 127
+SIAMAPN_SEARCH_SIZE = 287
 
 
 class VideoWidget(QWidget):
@@ -570,8 +576,10 @@ class MainWindow(QMainWindow):
         center_x, center_y = self.selection_center_frame
         aspect_ratio = self.config.tracking.selection_aspect_ratio
 
-        half_w = max(abs(drag_point[0] - center_x), 6.0)
-        half_h = half_w / aspect_ratio
+        dx = abs(drag_point[0] - center_x)
+        dy = abs(drag_point[1] - center_y)
+        half_h = max(dy, dx / aspect_ratio, 12.0)
+        half_w = max(half_h * aspect_ratio, 6.0)
 
         max_half_w = min(center_x, frame_w - center_x)
         max_half_h = min(center_y, frame_h - center_y)
@@ -642,13 +650,33 @@ class MainWindow(QMainWindow):
 
     def _template_crop_from_target(self, bbox: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
         x, y, w, h = bbox
-        side = int(round(max(w, h) * self.config.tracking.template_crop_scale))
-        return self._square_box_from_center((x + w / 2, y + h / 2), max(side, max(w, h)))
+        side = int(
+            round(
+                compute_crop_size(
+                    bbox,
+                    context_amount=SIAMAPN_CONTEXT_AMOUNT,
+                    area_scale=self.config.tracking.template_crop_scale,
+                )
+            )
+        )
+        return self._square_box_from_center((x + w / 2, y + h / 2), side)
 
     def _search_crop_from_target(self, bbox: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
-        tx, ty, tw, th = self._template_crop_from_target(bbox)
-        side = int(round(max(tw, th) * self.config.tracking.search_crop_scale))
-        return self._square_box_from_center((tx + tw / 2, ty + th / 2), max(side, max(tw, th)))
+        x, y, w, h = bbox
+        if self.config.tracking.backend == "siamapn":
+            area_scale = SIAMAPN_SEARCH_SIZE / SIAMAPN_TEMPLATE_SIZE
+        else:
+            area_scale = self.config.tracking.search_crop_scale
+        side = int(
+            round(
+                compute_crop_size(
+                    bbox,
+                    context_amount=SIAMAPN_CONTEXT_AMOUNT,
+                    area_scale=area_scale,
+                )
+            )
+        )
+        return self._square_box_from_center((x + w / 2, y + h / 2), side)
 
     def _square_box_from_center(self, center: tuple[float, float], side: int) -> tuple[int, int, int, int]:
         frame_w, frame_h = self.current_frame_size

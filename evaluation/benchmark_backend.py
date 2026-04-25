@@ -9,6 +9,7 @@ def benchmark_widths(sequences, config, widths):
     results = []
     for width in widths:
         config.tracking.track_max_width = width
+        backend = create_backend(config.tracking)
 
         total_latency_ms = 0.0
         total_tracked_frames = 0
@@ -18,7 +19,7 @@ def benchmark_widths(sequences, config, widths):
 
         for sequence in sequences:
             try:
-                latency_ms, tracked_frames, iou_sum, success_50 = run_sequence_benchmark(sequence, config)
+                latency_ms, tracked_frames, iou_sum, success_50 = run_sequence_benchmark(sequence, backend)
             except RuntimeError as exc:
                 print(f"skip {sequence.seq_id}: {exc}")
                 continue
@@ -47,8 +48,8 @@ def benchmark_widths(sequences, config, widths):
     return results
 
 
-def run_sequence_benchmark(sequence, config):
-    backend = create_backend(config.tracking)
+def run_sequence_benchmark(sequence, backend):
+    backend.reset()
     latency_ms = 0.0
     tracked_frames = 0
     iou_sum = 0.0
@@ -129,7 +130,7 @@ def main():
     parser.add_argument("--raw-root", default="data/raw")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--limit", type=int, default=4)
-    parser.add_argument("--widths", nargs="+", type=int, default=[640, 512, 480, 384, 320])
+    parser.add_argument("--widths", nargs="+", type=int, default=[640, 384])
     parser.add_argument("--override", action="append", default=[], metavar="KEY=VALUE")
     args = parser.parse_args()
 

@@ -36,6 +36,15 @@ class TrainSettings:
     train_samples_per_epoch: int = 2048
     translation_jitter: float = 0.15
     scale_jitter: float = 0.1
+    color_jitter_prob: float = 0.2
+    brightness_jitter: float = 0.2
+    contrast_jitter: float = 0.2
+    saturation_jitter: float = 0.2
+    grayscale_prob: float = 0.05
+    blur_prob: float = 0.15
+    noise_prob: float = 0.1
+    horizontal_flip_prob: float = 0.08
+    template_trim_jitter: float = 0.05
 
 
 @dataclass(slots=True)
@@ -215,6 +224,22 @@ def build_config(raw: dict, config_path: str | Path | None = None) -> ProjectCon
         raise ValueError("train.learning_rate must be positive")
     if train.weight_decay < 0:
         raise ValueError("train.weight_decay cannot be negative")
+    if train.train_samples_per_epoch <= 0:
+        raise ValueError("train.train_samples_per_epoch must be positive")
+    for key in (
+        "translation_jitter",
+        "scale_jitter",
+        "brightness_jitter",
+        "contrast_jitter",
+        "saturation_jitter",
+        "template_trim_jitter",
+    ):
+        if getattr(train, key) < 0:
+            raise ValueError(f"train.{key} cannot be negative")
+    for key in ("color_jitter_prob", "grayscale_prob", "blur_prob", "noise_prob", "horizontal_flip_prob"):
+        value = getattr(train, key)
+        if value < 0 or value > 1:
+            raise ValueError(f"train.{key} must be between 0 and 1")
     if infer.confidence_threshold < 0 or infer.confidence_threshold > 1:
         raise ValueError("infer.confidence_threshold must be between 0 and 1")
     validate_tracking_settings(tracking)

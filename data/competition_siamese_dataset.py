@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
+import cv2
 from torch import Tensor
 from torch.utils.data import Dataset
 
@@ -52,6 +53,15 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         frame_range: int = 100,
         translation_jitter: float = 0.0,
         scale_jitter: float = 0.0,
+        color_jitter_prob: float = 0.0,
+        brightness_jitter: float = 0.0,
+        contrast_jitter: float = 0.0,
+        saturation_jitter: float = 0.0,
+        grayscale_prob: float = 0.0,
+        blur_prob: float = 0.0,
+        noise_prob: float = 0.0,
+        horizontal_flip_prob: float = 0.0,
+        template_trim_jitter: float = 0.0,
         seed: int = 0,
     ) -> None:
         super().__init__()
@@ -65,6 +75,15 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         self.frame_range = int(frame_range)
         self.translation_jitter = float(translation_jitter)
         self.scale_jitter = float(scale_jitter)
+        self.color_jitter_prob = float(color_jitter_prob)
+        self.brightness_jitter = float(brightness_jitter)
+        self.contrast_jitter = float(contrast_jitter)
+        self.saturation_jitter = float(saturation_jitter)
+        self.grayscale_prob = float(grayscale_prob)
+        self.blur_prob = float(blur_prob)
+        self.noise_prob = float(noise_prob)
+        self.horizontal_flip_prob = float(horizontal_flip_prob)
+        self.template_trim_jitter = float(template_trim_jitter)
         self.seed = int(seed)
         self.epoch = 0
         self.anchor_target = AnchorTarget(search_size=self.search_size, stride=8)
@@ -197,6 +216,79 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
         search_index = int(search_candidates[int(rng.integers(search_candidates.size))])
         return indexed_sequence.sequence, template_index, search_index
 
+    def _apply_color_jitter(self, patch: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+        if self.color_jitter_prob <= 0 or rng.random() >= self.color_jitter_prob:
+            return patch
+
+        image = patch.astype(np.float32)
+        if self.brightness_jitter > 0:
+            image *= 1.0 + rng.uniform(-self.brightness_jitter, self.brightness_jitter)
+
+        if self.contrast_jitter > 0:
+            mean = image.mean(axis=(0, 1), keepdims=True)
+            image = (image - mean) * (1.0 + rng.uniform(-self.contrast_jitter, self.contrast_jitter)) + mean
+
+        image = np.clip(image, 0, 255).astype(np.uint8)
+        if self.saturation_jitter > 0:
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 1] *= 1.0 + rng.uniform(-self.saturation_jitter, self.saturation_jitter)
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1], 0, 255)
+            image = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        return image
+
+    def _apply_patch_augmentations(self, patch: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+        patch = self._apply_color_jitter(patch, rng)
+
+        if self.grayscale_prob > 0 and rng.random() < self.grayscale_prob:
+            gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+            patch = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+        if self.blur_prob > 0 and rng.random() < self.blur_prob:
+            kernel_size = int(rng.choice(np.asarray([3, 5], dtype=np.int32)))
+            patch = cv2.GaussianBlur(patch, (kernel_size, kernel_size), 0)
+
+        if self.noise_prob > 0 and rng.random() < self.noise_prob:
+            noise = rng.normal(loc=0.0, scale=255.0 * 0.02, size=patch.shape)
+            patch = np.clip(patch.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+
+        return np.ascontiguousarray(patch)
+
+    def _trim_and_resize_template(self, patch: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+        if self.template_trim_jitter <= 0:
+            return patch
+
+        height, width = patch.shape[:2]
+        trim_fraction = rng.uniform(0.0, self.template_trim_jitter)
+        crop_scale = max(0.5, 1.0 - trim_fraction)
+        crop_w = max(2, int(round(width * crop_scale)))
+        crop_h = max(2, int(round(height * crop_scale)))
+        x1 = max(0, (width - crop_w) // 2)
+        y1 = max(0, (height - crop_h) // 2)
+        cropped = patch[y1 : y1 + crop_h, x1 : x1 + crop_w]
+        return cv2.resize(cropped, (width, height), interpolation=cv2.INTER_LINEAR)
+
+    def _maybe_flip_pair(
+        self,
+        template_patch: np.ndarray,
+        search_patch: np.ndarray,
+        bbox_xyxy: np.ndarray,
+        rng: np.random.Generator,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if self.horizontal_flip_prob <= 0 or rng.random() >= self.horizontal_flip_prob:
+            return template_patch, search_patch, bbox_xyxy
+
+        flipped_bbox = bbox_xyxy.copy()
+        old_x1 = float(bbox_xyxy[0])
+        old_x2 = float(bbox_xyxy[2])
+        flipped_bbox[0] = self.search_size - old_x2
+        flipped_bbox[2] = self.search_size - old_x1
+        flipped_bbox[[0, 2]] = np.clip(flipped_bbox[[0, 2]], 0.0, float(self.search_size))
+        return (
+            np.ascontiguousarray(template_patch[:, ::-1]),
+            np.ascontiguousarray(search_patch[:, ::-1]),
+            flipped_bbox.astype(np.float32),
+        )
+
     def __getitem__(self, index: int) -> dict[str, Tensor | str | int]:
         rng = self._rng_for_index(index)
         max_attempts = max(8, len(self.indexed_sequences))
@@ -264,6 +356,10 @@ class CompetitionSiameseDataset(Dataset[dict[str, Tensor | str | int]]):
                 )
                 x, y, w, h = [float(v) for v in search_bbox_xywh]
                 bbox = np.asarray([x, y, x + w, y + h], dtype=np.float32)
+                template_patch, search_patch, bbox = self._maybe_flip_pair(template_patch, search_patch, bbox, rng)
+                template_patch = self._trim_and_resize_template(template_patch, rng)
+                template_patch = self._apply_patch_augmentations(template_patch, rng)
+                search_patch = self._apply_patch_augmentations(search_patch, rng)
                 labelcls2, labelxff, _, labelcls3, weightxff = self.anchor_target.get(bbox, self.output_size)
             except ValueError as exc:
                 last_error = exc

@@ -17,9 +17,10 @@ tracking:
   lost_confidence_threshold: 0.35
   trail_length: 20
   search_radius_scale: 2.0
-  selection_aspect_ratio: 0.5
+  selection_aspect_ratio: 1.0
   default_selection_height_fraction: 0.2
   template_crop_scale: 1.0
+  # Used for non-SiamAPN/custom search overlays. SiamAPN++ uses 287 / 127.
   search_crop_scale: 2.0
   track_max_width: 384
 

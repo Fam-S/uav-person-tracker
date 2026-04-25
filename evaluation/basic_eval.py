@@ -8,7 +8,7 @@ from data import load_sequences, read_sequence_frames, write_submission_csv
 from tqdm import tqdm
 
 
-def run_public_lb(sequences, make_backend):
+def run_public_lb(sequences, backend):
     """Run one backend over the public leaderboard split and collect rows by id."""
 
     # predictions will map each row id (e.g. "dataset1/Car_video_0_5") to a bbox tuple (x, y, w, h).
@@ -19,7 +19,7 @@ def run_public_lb(sequences, make_backend):
     progress = tqdm(sequences, desc="public_lb", unit="seq")
     for sequence in progress:
         # Run the tracker on every frame of this sequence and get back its predictions + timing.
-        sequence_predictions, latency_ms, tracked_frames = run_sequence(sequence, make_backend)
+        sequence_predictions, latency_ms, tracked_frames = run_sequence(sequence, backend)
 
         # Merge this sequence's predictions into the overall dict.
         predictions.update(sequence_predictions)
@@ -35,9 +35,9 @@ def run_public_lb(sequences, make_backend):
     return predictions
 
 
-def run_sequence(sequence, make_backend):
-    # Create a fresh backend instance for every sequence so state doesn't leak between them.
-    backend = make_backend()
+def run_sequence(sequence, backend):
+    # Reuse the already-loaded backend, but clear tracker state between sequences.
+    backend.reset()
     predictions = {}
     latency_ms = 0.0
     tracked_frames = 0
@@ -61,7 +61,7 @@ def run_sequence(sequence, make_backend):
             latency_ms += result.latency_ms  # accumulate how long tracking took
             tracked_frames += 1
     finally:
-        # Always release backend resources (GPU memory, file handles, etc.) even if an error occurs.
+        # Always clear sequence state even if an error occurs. The loaded model remains reusable.
         backend.reset()
 
     return predictions, latency_ms, tracked_frames
@@ -114,13 +114,12 @@ def main():
     # Load only the sequences that belong to the public leaderboard split.
     sequences = load_sequences(args.raw_root, "public_lb")
 
-    # make_backend is a factory: calling it returns a fresh, ready-to-use tracker instance.
-    def make_backend():
-        return create_backend(project_config.tracking)
+    # Load the backend once, then reset/reinitialize sequence state for each video.
+    backend = create_backend(project_config.tracking)
 
     # Time the full evaluation from start to finish.
     start = perf_counter()
-    predictions = run_public_lb(sequences, make_backend)
+    predictions = run_public_lb(sequences, backend)
     write_submission_csv(args.raw_root, args.output, predictions)
     elapsed = perf_counter() - start
 

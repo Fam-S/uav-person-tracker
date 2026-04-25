@@ -13,7 +13,7 @@ model:
 train:
   dataset_root: data/raw
   batch_size: 8
-  epochs: 20
+  epochs: 10
   learning_rate: 0.0001
   weight_decay: 0.0001
   device: cuda
@@ -23,9 +23,18 @@ train:
   num_workers: 2
   pin_memory: true
 
-  train_samples_per_epoch: 2048
+  train_samples_per_epoch: 512
   translation_jitter: 0.15
   scale_jitter: 0.1
+  color_jitter_prob: 0.2
+  brightness_jitter: 0.2
+  contrast_jitter: 0.2
+  saturation_jitter: 0.2
+  grayscale_prob: 0.05
+  blur_prob: 0.15
+  noise_prob: 0.1
+  horizontal_flip_prob: 0.08
+  template_trim_jitter: 0.05
 
 infer:
   checkpoint: checkpoints/best.pth

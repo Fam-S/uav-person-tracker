@@ -10,9 +10,9 @@ The system takes UAV video input, initializes a target in the first frame, and c
 
 Current implementation status:
 
-- the repository is in transition before the primary tracker rewrite starts
-- the GUI and backend abstraction are already in place
-- the planned primary model implementation is documented before the code swap lands
+- the active tracker backend is the full original-style SiamAPN++ port with MobileOne-S2
+- APN/head/loss/target/decode logic is copied/adapted into active repo modules
+- third-party provenance and notices are preserved under `docs/references/`
 
 Current project scope:
 
@@ -111,8 +111,8 @@ UAV Video
 Frame Extractor
    ↓
 Tracker Backend
-   ├── Current app backend: OpenCV CSRT
-   └── Planned primary backend: SiamAPN++ + MobileOne-S2
+    ├── Baseline backend: OpenCV CSRT
+    └── Active primary backend: SiamAPN++ + MobileOne-S2
        ├── Template branch
        ├── Search branch
        ├── MobileOne-S2 dual-level features
@@ -130,10 +130,10 @@ Tracked Person Output
 
 ## Features
 
-* Planned primary tracker: `SiamAPN++ + MobileOne-S2`
-* CPU-oriented design with MobileOne re-parameterization planned for deployment
+* Active primary tracker: `SiamAPN++ + MobileOne-S2`
+* CPU-oriented design with MobileOne re-parameterization support for deployment
 * **Desktop GUI** (`app/`) built with PySide6 — load video, select target, track in real time
-* Current app backend: OpenCV CSRT, behind a swappable tracker interface during the transition
+* OpenCV CSRT baseline behind the same swappable tracker interface
 * Threaded rendering — worker thread runs the tracker; Qt main thread renders at 30 fps without blocking
 * Frame downscaling before tracking (`track_max_width`) for speed without sacrificing display resolution
 * Explicit tracker states: Tracking, Uncertain, Lost
@@ -152,6 +152,8 @@ Tracked Person Output
 - [`docs/references/public_dataset_notes.md`](docs/references/public_dataset_notes.md) - Notes on the competition dataset, person-tracking alignment, and recommended supplementary public datasets.
 - [`docs/info-for-agents.md`](docs/info-for-agents.md) - Consolidated notes about dataset structure, rules, scoring, and constraints from the overlapping MTC-AIC4 context.
 - [`docs/references/models_comparisons.md`](docs/references/models_comparisons.md) - Older model comparison notes kept as reference material.
+- [`docs/references/siamapn_port_provenance.md`](docs/references/siamapn_port_provenance.md) - Source mapping and adaptations for the active SiamAPN++/MobileOne port.
+- [`docs/references/third_party_notices.md`](docs/references/third_party_notices.md) - Preserved third-party license/notice information.
 
 ---
 
