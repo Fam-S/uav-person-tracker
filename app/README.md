@@ -258,6 +258,17 @@ Version 1 does **not** include:
 
 The long-term app direction should support **both file input and live input**.
 
+## Drone command events
+
+The app emits compact drone-control hints into the Events panel when tracking is active. These events are intended as simple operator cues rather than precise flight commands.
+
+- `Stationary`: tracker reports negligible motion.
+- `Right` / `Left`: inferred from lateral image-plane motion (target moving right/left).
+- `Up` / `Down`: inferred from vertical image-plane motion (target moving up/down).
+- `Forward` / `Backward`: inferred from bounding-box size change (depth cue). An increase in box area maps to `Forward` (target appears larger), a decrease maps to `Backward` (target appears smaller).
+
+The controller chooses the strongest cue each frame and emits a single direction with an estimated force percentage (0–100%). You can tune the sensitivity in `app/controller.py` if you prefer different thresholds or multi-axis commands.
+
 That can later expand to:
 
 - recorded video files

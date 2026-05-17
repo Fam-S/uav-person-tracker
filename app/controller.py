@@ -39,6 +39,7 @@ class AppController:
         self.last_fps: float | None = None
         self._last_command: tuple[str, float] | None = None
         self._smoothed_velocity: np.ndarray | None = None
+        self._prev_bbox_area: float | None = None
 
         # render timer handle — non-None means tracking is running
         self.tick_timer = None
@@ -291,6 +292,14 @@ class AppController:
         self.ui.set_persistent_selection_box(result.bbox)
         self._send_drone_command()
 
+        # remember bbox area for next tick so we can infer forward/backward motion
+        if result.bbox is not None:
+            _, _, w, h = result.bbox
+            try:
+                self._prev_bbox_area = float(w) * float(h)
+            except Exception:
+                self._prev_bbox_area = None
+
         self._render_current_frame()
         self._schedule_render_tick()
         self._sync_ui_state()
@@ -413,8 +422,37 @@ class AppController:
                 else:
                     direction = "Down" if vy > 0 else "Up"
                     force = min(100, int(abs_vy * 10))
-            if self._last_command != (direction, force):
-                self._last_command = (direction, force)
-                self.ui.set_command(direction, force)
+            # Infer forward/backward from bbox size change (depth cue) when available
+            depth_force = 0
+            depth_dir: str | None = None
+            depth_delta = 0.0
+            try:
+                prev_area = self._prev_bbox_area
+                cur_bbox = self.current_bbox
+                if prev_area is not None and cur_bbox is not None:
+                    _, _, cw, ch = cur_bbox
+                    cur_area = float(cw) * float(ch)
+                    if prev_area > 1.0:
+                        delta = (cur_area - prev_area) / prev_area
+                        depth_delta = delta
+                        depth_force = min(100, int(abs(delta) * 200))
+                        depth_dir = "Forward" if delta > 0 else "Backward"
+            except Exception:
+                depth_force = 0
+                depth_delta = 0.0
+
+            # Prefer depth command if box-size change is meaningful.
+            # This helps capture forward/backward motion even when some lateral velocity exists.
+            if depth_dir is not None and (
+                depth_force >= max(force, 1)
+                or abs(depth_delta) > 0.03
+            ):
+                chosen_dir, chosen_force = depth_dir, max(depth_force, 5)
+            else:
+                chosen_dir, chosen_force = direction, force
+
+            if self._last_command != (chosen_dir, chosen_force):
+                self._last_command = (chosen_dir, chosen_force)
+                self.ui.set_command(chosen_dir, chosen_force)
         except (AttributeError, TypeError, ValueError):
             pass
